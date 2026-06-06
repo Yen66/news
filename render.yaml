@@ -1,0 +1,44 @@
+# Render Blueprint — free tier web service.
+# Deploy: push to GitHub, then "New +" -> "Blueprint" in the Render dashboard
+# and point it at this repo. Set the secret env vars in the dashboard (they
+# are marked sync: false so they are NOT committed).
+services:
+  - type: web
+    name: news-telegram-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      # --- Secrets: set these in the Render dashboard (never commit) -------
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: ADMIN_TELEGRAM_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # Gemini is disabled by default; add the key later if you enable it.
+      - key: GEMINI_API_KEY
+        sync: false
+      # --- Non-secret tunables --------------------------------------------
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
+      - key: ENABLE_EDITOR
+        value: "true"
+      - key: DAILY_AI_CALL_BUDGET
+        value: "1000"
+      - key: GEMINI_ENABLED
+        value: "false"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: CHANNEL_LANGUAGE
+        value: "ru"

@@ -1,0 +1,6 @@
+aiohttp>=3.9,<4.0
+openai>=1.30,<2.0
+feedparser>=6.0,<7.0
+beautifulsoup4>=4.12,<5.0
+asyncpg>=0.29,<0.31
+python-dotenv>=1.0,<2.0
