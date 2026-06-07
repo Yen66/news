@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import Counter
 from typing import Optional
 
 from aiohttp import web
@@ -59,6 +60,7 @@ class NewsBotApp:
         self._stopping = asyncio.Event()
         self._last_poll_ts: float = time.time()
         self._published_total = 0
+        self._poll_count = 0
 
     # --- status for /health -------------------------------------------------
     def status(self) -> dict:
@@ -131,6 +133,8 @@ class NewsBotApp:
     # --- background loops ---------------------------------------------------
     async def _poll_loop(self) -> None:
         interval = self._config.poll_interval_seconds
+        log.info("Poller task started (interval=%ds, sources=%d)",
+                 interval, len(self._sources))
         while not self._stopping.is_set():
             self._last_poll_ts = time.time()
             try:
@@ -142,9 +146,13 @@ class NewsBotApp:
                 await asyncio.wait_for(self._stopping.wait(), timeout=interval)
             except asyncio.TimeoutError:
                 pass
+        log.info("Poller task stopped.")
 
     async def _poll_once(self) -> None:
+        self._poll_count += 1
+        cycle = self._poll_count
         raw = await self._fetcher.fetch_all(self._sources)
+        by_source = Counter(i.source_id for i in raw)
         kept = filter_items(raw)                 # keyword + ads + opinion gate
         fresh = self._dedup.filter_new(kept)     # exact + fuzzy dedup
         # Sort by impact so high-impact items enter the queue first.
@@ -153,22 +161,42 @@ class NewsBotApp:
         for item in fresh:
             if await self._queue.put(item):
                 queued += 1
-        if queued:
+        # Log EVERY cycle so the poller's liveness is always visible.
+        log.info(
+            "Poll #%d: fetched=%d kept=%d new=%d queued=%d per_source=%s",
+            cycle,
+            len(raw),
+            len(kept),
+            len(fresh),
+            queued,
+            dict(by_source),
+        )
+        if not raw:
+            log.warning(
+                "Poll #%d fetched 0 items from %d sources — sources may be "
+                "unreachable/blocked or returning errors (see WARNINGs above).",
+                cycle,
+                len(self._sources),
+            )
+        elif not kept:
             log.info(
-                "Poll: %d raw, %d kept, %d new, %d queued",
+                "Poll #%d: all %d fetched items were filtered out "
+                "(keyword/ads/opinion gate).",
+                cycle,
                 len(raw),
-                len(kept),
-                len(fresh),
-                queued,
             )
 
     async def _consume_loop(self) -> None:
+        log.info("Consumer task started.")
         while not self._stopping.is_set():
             item = await self._queue.get()
+            log.info("Processing item from %s: %s", item.source_id, item.title)
             try:
                 published = await self._processor.process_one(item)
                 if published:
                     self._published_total += 1
+                else:
+                    log.info("Item not published (dedup/budget): %s", item.title)
             except Exception as exc:  # noqa: BLE001 - alert + continue
                 log.exception("Processing failed for: %s", item.title)
                 await self._safe_alert(
@@ -176,6 +204,24 @@ class NewsBotApp:
                 )
             finally:
                 self._queue.task_done()
+        log.info("Consumer task stopped.")
+
+    def _supervise(self, task: asyncio.Task) -> None:
+        """Log + alert if a background task ever exits unexpectedly."""
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("Background task %r died with: %s", task.get_name(), exc,
+                      exc_info=exc)
+            asyncio.create_task(
+                self._safe_alert(f"Фоновая задача {task.get_name()} упала: {exc}")
+            )
+        elif not self._stopping.is_set():
+            log.error(
+                "Background task %r exited unexpectedly (no exception).",
+                task.get_name(),
+            )
 
     # --- web runner ---------------------------------------------------------
     async def run(self) -> None:
@@ -184,6 +230,10 @@ class NewsBotApp:
             asyncio.create_task(self._poll_loop(), name="poller"),
             asyncio.create_task(self._consume_loop(), name="consumer"),
         ]
+        for task in self._tasks:
+            task.add_done_callback(self._supervise)
+        log.info("Background tasks created: %s",
+                 [t.get_name() for t in self._tasks])
 
         app = build_app(self.status)
         runner = web.AppRunner(app)
