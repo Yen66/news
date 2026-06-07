@@ -2,8 +2,10 @@ from src.ai.writer import (
     PostWriter,
     credibility_label,
     is_established_source,
+    sanitize_text,
     _parse_fields,
     _render_post,
+    _strip_forbidden,
 )
 from tests.conftest import FakeAIClient, make_item
 
@@ -116,6 +118,49 @@ async def test_editor_skipped_for_unknown_low_impact():
     post = await writer.write(item)
     assert not post.editor_used
     assert len(ai.calls) == 1
+
+
+def test_sanitize_strips_cjk_keeps_russian_latin_arrows():
+    # The exact bug from the report: Chinese chars inside a Russian word.
+    assert sanitize_text("затрагивает主要ые активы") == "затрагиваетые активы"
+    # Arrows and tickers must survive.
+    assert sanitize_text("высокое ↑ бычье BTC 100000") == (
+        "высокое ↑ бычье BTC 100000"
+    )
+    # Japanese / Korean / emoji-like glyphs removed.
+    assert "日本" not in sanitize_text("рынок 日本 растёт")
+    assert sanitize_text("цена $100 и €50") == "цена $100 и €50"
+
+
+def test_render_strips_cjk_from_fields():
+    fields = _parse_fields(
+        "ЗАГОЛОВОК: Биткоин 主要 растёт\n"
+        "ТЕКСТ: Цена выросла на 5%主要 за день.\n"
+        "ВЛИЯНИЕ: высокое ↑ бычье\n"
+        "АКТИВЫ: BTC"
+    )
+    body = _render_post(fields, make_item("x", source_name="CoinDesk",
+                                          link="https://coindesk.com/a"))
+    assert "主要" not in body
+    assert "↑ бычье" in body
+
+
+def test_strip_forbidden_phrases():
+    assert "Суть:" not in _strip_forbidden("Суть: Биткоин вырос")
+    assert "Оценка:" not in _strip_forbidden("Оценка: высокое")
+    assert "не указана" not in _strip_forbidden("Дата не указана сегодня")
+
+
+async def test_render_removes_forbidden_in_body():
+    fields = (
+        "ЗАГОЛОВОК: Тест\nТЕКСТ: Суть: Биткоин вырос на 10%.\n"
+        "ВЛИЯНИЕ: высокое ↑ бычье\nАКТИВЫ: BTC"
+    )
+    ai = FakeAIClient(reply=fields)
+    writer = PostWriter(ai, enable_editor=False)
+    post = await writer.write(make_item("x", source_name="Blog",
+                                        link="https://b.io/a"))
+    assert "Суть:" not in post.body
 
 
 async def test_post_official_reflects_source():

@@ -48,17 +48,25 @@ _FIELD_RE = re.compile(
 )
 
 _WRITER_SYSTEM = (
-    "Ты — финансовый журналист в стиле терминала Bloomberg, резкий и точный "
-    "аналитик. Пиши на русском уверенно, прямо и информативно, без воды, без "
-    "эмодзи и без хэштегов. Категорически запрещены слова-смягчители: "
-    "«возможно», «вероятно», «может», «могут», «по-видимому», «скорее всего», "
-    "«как ожидается». Утверждай факты уверенно и обязательно используй "
-    "конкретные числа и цифры из материала. Не выдумывай факты — опирайся "
-    "только на предоставленные заголовок и описание.\n\n"
+    "Ты — финансовый журналист, который пишет срочные новости в стиле "
+    "Bloomberg breaking news: резко, уверенно, по делу, с лёгким ощущением "
+    "срочности. Это живая новость, а не отчёт аналитика и не справка из "
+    "Википедии.\n\n"
+    "Правила для поля ТЕКСТ:\n"
+    "- Начни с самого драматичного и важного факта, сразу с цифр.\n"
+    "- Активный залог, конкретные числа в начале предложения.\n"
+    "- Простыми словами объясни, почему это важно именно криптоинвестору.\n"
+    "- Максимум 3 предложения.\n"
+    "- Только русский язык. Не используй иероглифы и другие иностранные "
+    "алфавиты; латиница допустима лишь для тикеров (BTC, ETH, COIN).\n"
+    "- Запрещены фразы: «Суть:», «Оценка:», «не указана», «вероятным "
+    "последствием является», а также слова-смягчители «возможно», "
+    "«вероятно», «может», «могут», «скорее всего».\n"
+    "- Не выдумывай факты: опирайся только на заголовок и описание.\n\n"
     "Верни РОВНО четыре строки строго в этом формате, без markdown и без "
     "любого другого текста:\n"
     "ЗАГОЛОВОК: <ёмкий, цепкий заголовок 3-7 слов, без точки в конце>\n"
-    "ТЕКСТ: <2-3 предложения: что произошло, причина и последствие, с цифрами>\n"
+    "ТЕКСТ: <до 3 предложений в стиле срочной новости, с цифрами>\n"
     "ВЛИЯНИЕ: <высокое|среднее|низкое> <↑ бычье|↓ медвежье|→ нейтральное>\n"
     "АКТИВЫ: <конкретные тикеры/активы через запятую>"
 )
@@ -70,11 +78,48 @@ _WRITER_TEMPLATE = (
 )
 
 _EDITOR_SYSTEM = (
-    "Ты — выпускающий редактор. Вычитай текст: сделай его более резким и "
-    "уверенным, убери смягчающие слова и повторы, сохрани все цифры и смысл. "
-    "Верни только финальный текст одной-тремя фразами, без комментариев и "
-    "без эмодзи."
+    "Ты — выпускающий редактор срочных новостей. Сделай текст резче и "
+    "увереннее, в стиле Bloomberg breaking news: убери смягчающие слова, "
+    "повторы и канцелярит, сохрани все цифры и смысл, максимум 3 предложения. "
+    "Только русский язык, без иероглифов и иностранных алфавитов (кроме "
+    "тикеров). Верни только финальный текст, без комментариев и без эмодзи."
 )
+
+# Characters we allow through from the model. Anything else (e.g. Chinese /
+# Japanese / Korean glyphs that occasionally leak from multilingual models) is
+# stripped before rendering. We keep Cyrillic, Latin, digits, whitespace,
+# common punctuation/currency, and the market-direction arrows.
+_ALLOWED_RE = re.compile(
+    "[^"
+    "Ѐ-ӿԀ-ԯ"          # Cyrillic
+    "A-Za-z0-9"                            # Latin + digits
+    "\\s"                                  # whitespace
+    ".,!?:;'\"()\\[\\]«»—–\\-%$€£₽₿+/&№*@#°=<>~^|"   # punctuation/symbols
+    "↑↓→"                                  # market direction arrows
+    "]"
+)
+
+# Phrases that must never appear in the body, stripped defensively in case the
+# model ignores the instruction.
+_FORBIDDEN_PHRASES = (
+    "Суть:",
+    "Оценка:",
+    "не указана",
+    "вероятным последствием является",
+)
+
+
+def sanitize_text(text: str) -> str:
+    """Drop non-Russian/Latin/numeric characters (e.g. stray CJK glyphs)."""
+    cleaned = _ALLOWED_RE.sub("", text)
+    cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def _strip_forbidden(text: str) -> str:
+    for phrase in _FORBIDDEN_PHRASES:
+        text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def _domain(link: str) -> str:
@@ -112,15 +157,20 @@ def _parse_fields(text: str) -> dict[str, str]:
 
 
 def _render_post(fields: dict[str, str], item: NewsItem) -> str:
-    """Assemble the final Telegram-HTML post from parsed fields."""
+    """Assemble the final Telegram-HTML post from parsed fields.
+
+    Every model-produced field is sanitized (stray CJK/foreign glyphs removed)
+    and the body has any forbidden phrases stripped before HTML-escaping.
+    """
     e = html.escape
 
-    headline = (fields.get("ЗАГОЛОВОК") or item.title or "").strip()
+    headline = sanitize_text(fields.get("ЗАГОЛОВОК") or item.title or "")
     headline = headline.rstrip(".").upper()
 
-    body = (fields.get("ТЕКСТ") or item.summary or item.title or "").strip()
-    impact = (fields.get("ВЛИЯНИЕ") or "среднее → нейтральное").strip()
-    assets = (fields.get("АКТИВЫ") or "—").strip()
+    body = sanitize_text(fields.get("ТЕКСТ") or item.summary or item.title or "")
+    body = _strip_forbidden(body)
+    impact = sanitize_text(fields.get("ВЛИЯНИЕ") or "среднее → нейтральное")
+    assets = sanitize_text(fields.get("АКТИВЫ") or "—")
 
     label = credibility_label(item)
     name = item.source_name or "Источник"
