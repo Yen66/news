@@ -79,6 +79,19 @@ class NewsBotApp:
 
     # --- lifecycle ----------------------------------------------------------
     async def startup(self) -> None:
+        tg = self._config.telegram
+        log.info(
+            "Telegram targets -> channel_id=%r (publish), admin_id=%r (alerts). "
+            "Posts go to the channel; alerts DM the admin.",
+            tg.channel_id,
+            tg.admin_id or "(none)",
+        )
+        if tg.admin_id:
+            log.info(
+                "Note: admin alerts require you to send /start to the bot once "
+                "from the admin account, or Telegram returns 403 'can't "
+                "initiate conversation with a user' (channel posts unaffected)."
+            )
         await self._repo.connect()
         await self._telegram.start()
         await self._fetcher.start()

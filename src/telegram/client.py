@@ -43,9 +43,9 @@ class TelegramClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def _send(self, chat_id: str, text: str) -> bool:
+    async def _send(self, chat_id: str, text: str, target: str = "chat") -> bool:
         if self._dry_run:
-            log.info("[DRY_RUN] -> %s:\n%s", chat_id, text)
+            log.info("[DRY_RUN] -> %s (%s):\n%s", chat_id, target, text)
             return True
         await self.start()
         assert self._session is not None
@@ -68,18 +68,33 @@ class TelegramClient:
                         await asyncio.sleep(retry_after)
                         continue
                     hint = ""
+                    low = body.lower()
                     if resp.status in (401, 404):
                         hint = (
                             " (check BOT_TOKEN — a 404/401 here usually means "
                             "the token is empty or wrong)"
                         )
-                    elif resp.status == 400 and "chat not found" in body.lower():
+                    elif resp.status == 400 and "chat not found" in low:
                         hint = (
                             " (check CHANNEL_ID, e.g. @CMW_News, and that the "
                             "bot is an admin of that channel)"
                         )
+                    elif resp.status == 403 and "can't initiate conversation" in low:
+                        hint = (
+                            " (this is the ADMIN alert to ADMIN_ID, not the "
+                            "channel. Open Telegram and send /start to the bot "
+                            "from your admin account so it can DM you. The "
+                            "channel itself is unaffected.)"
+                        )
+                    elif resp.status == 403:
+                        hint = (
+                            " (forbidden — for the channel, make the bot an "
+                            "admin; for admin alerts, send /start to the bot)"
+                        )
                     log.error(
-                        "Telegram sendMessage failed (%s): %s%s",
+                        "Telegram sendMessage to %s (%s) failed (%s): %s%s",
+                        chat_id,
+                        target,
                         resp.status,
                         body,
                         hint,
@@ -92,11 +107,13 @@ class TelegramClient:
 
     async def publish(self, text: str) -> bool:
         """Publish a post to the channel."""
-        return await self._send(self._channel_id, text)
+        return await self._send(self._channel_id, text, target="channel")
 
     async def alert_admin(self, text: str) -> bool:
         """Send an operational alert to the admin (errors, lifecycle)."""
         if not self._admin_id:
             log.warning("No ADMIN_ID set; alert dropped: %s", text)
             return False
-        return await self._send(self._admin_id, f"[NewsBot] {text}")
+        return await self._send(
+            self._admin_id, f"[NewsBot] {text}", target="admin"
+        )
