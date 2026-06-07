@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from datetime import datetime, timezone
 from time import mktime
 from typing import List, Optional
@@ -125,15 +127,27 @@ class FeedFetcher:
 
     def _url_for(self, source: Source) -> str:
         if source.kind == "telegram":
-            return f"https://t.me/s/{source.url}"
-        return source.url
+            base = f"https://t.me/s/{source.url}"
+        else:
+            base = source.url
+        # Cache-busting query param to bypass CDN/edge caches that may serve a
+        # stale copy of the feed. A monotonically-increasing value is enough.
+        buster = f"_cb={int(time.time() * 1000)}-{random.randint(0, 1_000_000)}"
+        sep = "&" if "?" in base else "?"
+        return f"{base}{sep}{buster}"
 
     async def fetch_source(self, source: Source) -> List[NewsItem]:
         await self.start()
         assert self._session is not None
         url = self._url_for(source)
         try:
-            async with self._session.get(url) as resp:
+            # Cache-busting request headers in addition to the URL param.
+            headers = {
+                "Cache-Control": "no-cache, no-store, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+            async with self._session.get(url, headers=headers) as resp:
                 if resp.status != 200:
                     log.warning(
                         "Source %s returned HTTP %s", source.id, resp.status
