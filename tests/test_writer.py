@@ -108,6 +108,38 @@ def test_unknown_sources_are_rumor():
     ) == "◉ Официально"
 
 
+def test_established_outlet_with_rumor_language_is_rumor():
+    # Even CoinDesk/CNBC become Слух when the article hedges.
+    assert credibility_label(make_item(
+        "Apple reportedly considering bitcoin treasury",
+        source_name="CoinDesk", link="https://coindesk.com/a")) == "◎ Слух"
+    assert credibility_label(make_item(
+        "SEC may approve spot ETF next week",
+        source_name="CNBC", link="https://cnbc.com/a")) == "◎ Слух"
+    assert credibility_label(make_item(
+        "Sources say Binance is in talks with regulators",
+        source_name="Reuters", link="https://reuters.com/a")) == "◎ Слух"
+
+
+def test_month_may_does_not_trigger_rumor():
+    # Capitalised month "May" must NOT be read as the hedge "may".
+    assert credibility_label(make_item(
+        "Bitcoin rallied 20% in May",
+        source_name="CoinDesk", link="https://coindesk.com/a")) == "◉ Официально"
+
+
+def test_unknown_outlet_with_official_language_is_official():
+    assert credibility_label(make_item(
+        "Company announced merger, confirmed in regulatory filing",
+        source_name="SomeBlog", link="https://b.io/a")) == "◉ Официально"
+
+
+def test_established_outlet_no_hedging_is_official():
+    assert credibility_label(make_item(
+        "Bitcoin closed at 70000",
+        source_name="Bloomberg", link="https://bloomberg.com/a")) == "◉ Официально"
+
+
 def test_gov_domain_is_official():
     assert is_established_source(
         make_item("x", source_name="Treasury", link="https://home.treasury.gov/n")

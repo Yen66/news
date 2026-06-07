@@ -173,8 +173,59 @@ def is_established_source(item: NewsItem) -> bool:
     return False
 
 
+# --- Per-article credibility detection ------------------------------------
+# Hedging / rumor language => "◎ Слух" even from an established outlet.
+_RUMOR_PHRASES = (
+    "по данным источников", "по слухам", "по информации источников",
+    "не подтверж", "reportedly", "sources say", "according to sources",
+    "unconfirmed", "rumor", "rumour", "allegedly", "expected to",
+    "is considering", "could", "is in talks", "is weighing", "is mulling",
+    "is exploring",
+)
+# Modal hedges matched case-SENSITIVE as whole words so the month "May" or a
+# capitalised sentence start does not trigger a false "rumor".
+_RUMOR_WORD_RE = re.compile(r"\b(may|might)\b")
+
+# Confirmed-action language => "◉ Официально" even from an unknown outlet.
+_OFFICIAL_PHRASES = (
+    "press release", "official statement", "announced", "has announced",
+    "confirmed", "approved", "signed into law", "regulatory filing",
+    "filed with", "sec filing", "files for", "ruling", "passed", "enacted",
+    "officially", "launched", "launches", "issued", "ratified",
+    "пресс-релиз", "официально", "подтверд", "одобрил", "подписал закон",
+)
+
+
+def has_rumor_language(item: NewsItem) -> bool:
+    text = f"{item.title} {item.summary}"
+    low = text.lower()
+    if any(p in low for p in _RUMOR_PHRASES):
+        return True
+    return bool(_RUMOR_WORD_RE.search(text))
+
+
+def has_official_language(item: NewsItem) -> bool:
+    low = f"{item.title} {item.summary}".lower()
+    return any(p in low for p in _OFFICIAL_PHRASES)
+
+
 def credibility_label(item: NewsItem) -> str:
-    return LABEL_OFFICIAL if is_established_source(item) else LABEL_RUMOR
+    """Per-article credibility.
+
+    Precedence:
+    1. Hedging/rumor language -> Слух (even for established outlets).
+    2. Confirmed-action language OR established outlet -> Официально.
+    3. Otherwise -> Слух.
+    """
+    if has_rumor_language(item):
+        return LABEL_RUMOR
+    if has_official_language(item) or is_established_source(item):
+        return LABEL_OFFICIAL
+    return LABEL_RUMOR
+
+
+def is_official_post(item: NewsItem) -> bool:
+    return credibility_label(item) == LABEL_OFFICIAL
 
 
 def _parse_fields(text: str) -> dict[str, str]:
@@ -248,10 +299,10 @@ class PostWriter:
         fields = _parse_fields(raw)
 
         editor_used = False
-        established = is_established_source(item)
-        # Proofread the main text only for important posts: established outlet
+        official = is_official_post(item)
+        # Proofread the main text only for important posts: officially-credible
         # OR high-impact.
-        important = established or item.impact >= 70
+        important = official or item.impact >= 70
         if self._enable_editor and important and fields.get("ТЕКСТ"):
             try:
                 edited, _ = await self._ai.complete(
@@ -268,7 +319,7 @@ class PostWriter:
         return Post(
             item=item,
             body=body,
-            official=established,
+            official=official,
             provider_used=provider,
             editor_used=editor_used,
         )
