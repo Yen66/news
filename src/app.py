@@ -24,7 +24,12 @@ from .config import Config
 from .db.repository import build_repository
 from .pipeline.dedup import Deduplicator
 from .pipeline.story import StoryDeduplicator
-from .pipeline.filters import filter_items, score_impact, should_publish
+from .pipeline.filters import (
+    filter_items,
+    is_historical,
+    score_impact,
+    should_publish,
+)
 from .pipeline.processor import Processor, ProcessingQueue
 from .pipeline.throttle import DailyBudget
 from .server import build_app
@@ -253,7 +258,18 @@ class NewsBotApp:
         recent = self._filter_by_age(raw)
         age_skipped = len(raw) - len(recent)
 
-        kept = filter_items(recent)              # keyword + ads + opinion gate
+        # Historical-content gate (retrospectives / "in 2022" pieces). Mark
+        # these seen so we don't reconsider them every cycle.
+        historical_skipped = 0
+        non_historical = []
+        for item in recent:
+            if is_historical(item):
+                self._dedup.mark(item)
+                historical_skipped += 1
+            else:
+                non_historical.append(item)
+
+        kept = filter_items(non_historical)      # keyword + ads + opinion gate
         fresh = self._dedup.filter_new(kept)     # exact (same-article) dedup
         # Highest-impact first so they win both the per-cycle cap and any
         # cross-source story collision.
@@ -275,11 +291,12 @@ class NewsBotApp:
 
         # Log EVERY cycle so the poller's liveness is always visible.
         log.info(
-            "Poll #%d: fetched=%d old=%d kept=%d new=%d story_dup=%d "
-            "queued=%d (cap=%d) per_source=%s",
+            "Poll #%d: fetched=%d old=%d historical=%d kept=%d new=%d "
+            "story_dup=%d queued=%d (cap=%d) per_source=%s",
             cycle,
             len(raw),
             age_skipped,
+            historical_skipped,
             len(kept),
             len(fresh),
             story_skipped,

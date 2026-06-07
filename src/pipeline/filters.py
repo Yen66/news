@@ -11,6 +11,7 @@ queue can prioritise official / high-impact news when near AI limits.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from typing import Iterable
 
 from ..models import NewsItem
@@ -182,6 +183,62 @@ def score_impact(item: NewsItem) -> int:
     return max(0, min(100, score))
 
 
+# --- Historical / retrospective content detection --------------------------
+# Phrases that strongly indicate the article's PRIMARY topic is an event from
+# years ago (retrospectives, year-in-review pieces, anniversaries).
+_HISTORICAL_PHRASES = [
+    re.compile(r"\b20(1[0-9]|2[0-4])\s*год\s*ста\w*", re.I),
+    re.compile(r"\bв\s+20(1[0-9]|2[0-4])\s+году\b", re.I),
+    re.compile(r"\bin\s+20(1[0-9]|2[0-4])\b", re.I),
+    re.compile(r"\bback\s+in\s+20(1[0-9]|2[0-4])\b", re.I),
+    re.compile(r"\b20(1[0-9]|2[0-4])\s+(?:was|saw|marked|became|brought)\b",
+               re.I),
+    re.compile(r"\b(?:year|years)\s+ago\b", re.I),
+    re.compile(r"\b(?:on\s+this\s+day|throwback|retrospective|"
+               r"year[\s-]?in[\s-]?review|anniversary)\b", re.I),
+    re.compile(r"\bретроспектив\w*", re.I),
+    re.compile(r"\b(?:годовщин\w+|итоги\s+20(1[0-9]|2[0-4]))", re.I),
+]
+
+_YEAR_RE = re.compile(r"\b(20[0-9]{2})\b")
+
+
+def _current_year() -> int:
+    return datetime.now(timezone.utc).year
+
+
+def title_is_historical(item: NewsItem) -> bool:
+    """True if the TITLE only mentions years <= current_year - 1 (no recent
+    year), implying a retrospective/historical headline."""
+    years = {int(y) for y in _YEAR_RE.findall(item.title)}
+    if not years:
+        return False
+    cutoff = _current_year() - 1  # treat last year + earlier as historical
+    return all(y <= cutoff for y in years)
+
+
+def is_historical(item: NewsItem) -> bool:
+    """True if the article's PRIMARY topic is an event from 2+ years ago.
+
+    Heuristic: title is retrospective (years <= last year and none current),
+    OR the body has a strong retrospective phrase AND no current-year date
+    mention (which would mean the old year is just context, not topic).
+    """
+    if title_is_historical(item):
+        return True
+    text = f"{item.title} {item.summary}"
+    has_retrospective = any(p.search(text) for p in _HISTORICAL_PHRASES)
+    if not has_retrospective:
+        return False
+    cy = _current_year()
+    current_years = {str(cy), str(cy - 1)}
+    body_years = set(_YEAR_RE.findall(text))
+    # If a current/last-year date is mentioned, the old year is likely context.
+    if body_years & current_years:
+        return False
+    return True
+
+
 def should_publish(item: NewsItem) -> bool:
     """The master mechanical gate. True => worth the AI call."""
     if not matches_keywords(item):
@@ -189,6 +246,8 @@ def should_publish(item: NewsItem) -> bool:
     if is_ad(item):
         return False
     if is_price_horoscope(item):
+        return False
+    if is_historical(item):
         return False
     # Opinions/forecasts only from influential people with a track record.
     if is_opinion(item) and not (item.official or has_influential_author(item)):

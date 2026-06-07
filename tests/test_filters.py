@@ -45,6 +45,50 @@ def test_should_publish_master_gate():
     assert not filters.should_publish(junk)
 
 
+def test_title_only_old_year_is_historical():
+    # Title mentions only 2022 -> retrospective.
+    assert filters.title_is_historical(
+        make_item("How Bitcoin survived the 2022 bear market")
+    )
+    assert filters.title_is_historical(make_item("2023 год стал переломным для крипты"))
+
+
+def test_title_with_current_year_not_historical():
+    from datetime import datetime, timezone
+    cy = datetime.now(timezone.utc).year
+    assert not filters.title_is_historical(
+        make_item(f"Bitcoin breaks 2022 record in {cy}")
+    )
+    assert not filters.title_is_historical(make_item("Bitcoin rallies above 70k"))
+
+
+def test_body_retrospective_phrase_is_historical():
+    item = make_item(
+        "Crypto retrospective",
+        summary="Back in 2022 the market collapsed amid FTX. A long look back.",
+    )
+    assert filters.is_historical(item)
+
+
+def test_old_year_as_context_is_not_historical():
+    from datetime import datetime, timezone
+    cy = datetime.now(timezone.utc).year
+    # Mentions 2022 but anchored in the current year => context, not topic.
+    item = make_item(
+        "Bitcoin update",
+        summary=f"In {cy} bitcoin rallied, recovering from its 2022 lows.",
+    )
+    assert not filters.is_historical(item)
+
+
+def test_historical_items_dropped_by_should_publish():
+    item = make_item(
+        "Bitcoin in 2022 saw its worst year",
+        summary="Back in 2022 BTC fell 65%.",
+    )
+    assert not filters.should_publish(item)
+
+
 def test_macro_keywords_match():
     for title in [
         "ECB holds interest rates steady",
