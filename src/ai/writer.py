@@ -43,32 +43,37 @@ LABEL_OFFICIAL = "◉ Официально"
 LABEL_RUMOR = "◎ Слух"
 
 _FIELD_RE = re.compile(
-    r"^\s*(ЗАГОЛОВОК|ТЕКСТ|ВЛИЯНИЕ|АКТИВЫ)\s*[:\-—]\s*(.+?)\s*$",
+    r"^\s*(ПРЕФИКС|ТЕКСТ|ТИКЕРЫ|ЗАГОЛОВОК|ВЛИЯНИЕ|АКТИВЫ)\s*[:\-—]\s*(.*?)\s*$",
     re.IGNORECASE,
 )
 
 _WRITER_SYSTEM = (
-    "Ты — финансовый журналист, который пишет срочные новости в стиле "
-    "Bloomberg breaking news: резко, уверенно, по делу, с лёгким ощущением "
+    "Ты — финансовый журналист срочных новостей в стиле Bloomberg breaking "
+    "news. Пиши на русском: резко, уверенно, по делу, с лёгким ощущением "
     "срочности. Это живая новость, а не отчёт аналитика и не справка из "
     "Википедии.\n\n"
-    "Правила для поля ТЕКСТ:\n"
-    "- Начни с самого драматичного и важного факта, сразу с цифр.\n"
-    "- Активный залог, конкретные числа в начале предложения.\n"
-    "- Простыми словами объясни, почему это важно именно криптоинвестору.\n"
-    "- Максимум 3 предложения.\n"
-    "- Только русский язык. Не используй иероглифы и другие иностранные "
-    "алфавиты; латиница допустима лишь для тикеров (BTC, ETH, COIN).\n"
-    "- Запрещены фразы: «Суть:», «Оценка:», «не указана», «вероятным "
-    "последствием является», а также слова-смягчители «возможно», "
-    "«вероятно», «может», «могут», «скорее всего».\n"
+    "Правила:\n"
+    "- НЕ пиши заголовок. Начинай сразу с ключевого факта.\n"
+    "- Первое предложение обязательно содержит конкретное число или цитату.\n"
+    "- Максимум 3 предложения. Активный залог, цифры в начале.\n"
+    "- Простыми словами объясни, почему это важно криптоинвестору.\n"
+    "- Цитаты влиятельных людей оформляй строго так: "
+    "Имя (Должность): «цитата».\n"
+    "- Только русский язык; латиница допустима лишь для тикеров и имён "
+    "(BTC, ETH, COIN, Coinbase). Не используй иероглифы и иные алфавиты.\n"
+    "- Запрещены фразы «Суть:», «Оценка:», «Метка:», «Время:», слова-"
+    "смягчители «возможно», «вероятно», «может», «могут», «скорее всего», и "
+    "любые ссылки или URL.\n"
     "- Не выдумывай факты: опирайся только на заголовок и описание.\n\n"
-    "Верни РОВНО четыре строки строго в этом формате, без markdown и без "
-    "любого другого текста:\n"
-    "ЗАГОЛОВОК: <ёмкий, цепкий заголовок 3-7 слов, без точки в конце>\n"
-    "ТЕКСТ: <до 3 предложений в стиле срочной новости, с цифрами>\n"
-    "ВЛИЯНИЕ: <высокое|среднее|низкое> <↑ бычье|↓ медвежье|→ нейтральное>\n"
-    "АКТИВЫ: <конкретные тикеры/активы через запятую>"
+    "Верни РОВНО эти поля, каждое с новой строки, без markdown и без любого "
+    "другого текста:\n"
+    "ПРЕФИКС: <пусто; либо ⚡️ если новость действительно срочная/прорывная; "
+    "либо флаг страны (🇺🇸 🇷🇺 🇨🇳 🇪🇺 и т.п.), если это новость о "
+    "регулировании или политике конкретной страны>\n"
+    "ТЕКСТ: <до 3 предложений; начни с числа или цитаты>\n"
+    "ТИКЕРЫ: <если в материале есть цены или проценты — одна строка вида "
+    "\"BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)\"; ↑ для роста, ↓ для "
+    "падения; если цен нет — оставь поле пустым>"
 )
 
 _WRITER_TEMPLATE = (
@@ -82,7 +87,8 @@ _EDITOR_SYSTEM = (
     "увереннее, в стиле Bloomberg breaking news: убери смягчающие слова, "
     "повторы и канцелярит, сохрани все цифры и смысл, максимум 3 предложения. "
     "Только русский язык, без иероглифов и иностранных алфавитов (кроме "
-    "тикеров). Верни только финальный текст, без комментариев и без эмодзи."
+    "тикеров и имён). Верни только финальный текст, без комментариев и без "
+    "эмодзи."
 )
 
 # Characters we allow through from the model. Anything else (e.g. Chinese /
@@ -94,7 +100,7 @@ _ALLOWED_RE = re.compile(
     "Ѐ-ӿԀ-ԯ"          # Cyrillic
     "A-Za-z0-9"                            # Latin + digits
     "\\s"                                  # whitespace
-    ".,!?:;'\"()\\[\\]«»—–\\-%$€£₽₿+/&№*@#°=<>~^|"   # punctuation/symbols
+    ".,!?:;'\"()\\[\\]«»—–\\-%$€£₽₿+/&№*@#°=<>~^|·"  # punctuation/symbols
     "↑↓→"                                  # market direction arrows
     "]"
 )
@@ -104,9 +110,18 @@ _ALLOWED_RE = re.compile(
 _FORBIDDEN_PHRASES = (
     "Суть:",
     "Оценка:",
+    "Метка:",
+    "Время:",
     "не указана",
     "вероятным последствием является",
 )
+
+_URL_RE = re.compile(r"(https?://\S+|www\.\S+|t\.me/\S+)", re.IGNORECASE)
+
+# Allowed prefix emojis: the breaking-news bolt and country flags (two
+# regional-indicator symbols, U+1F1E6–U+1F1FF).
+_BOLT = "⚡️"
+_FLAG_RE = re.compile("[\U0001F1E6-\U0001F1FF]{2}")
 
 
 def sanitize_text(text: str) -> str:
@@ -116,10 +131,26 @@ def sanitize_text(text: str) -> str:
     return cleaned.strip()
 
 
+def _strip_urls(text: str) -> str:
+    return _URL_RE.sub("", text)
+
+
 def _strip_forbidden(text: str) -> str:
     for phrase in _FORBIDDEN_PHRASES:
         text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def _clean_prefix(raw: str) -> str:
+    """Keep only an allowed prefix: the ⚡️ bolt or a single country flag."""
+    if not raw:
+        return ""
+    flag = _FLAG_RE.search(raw)
+    if flag:
+        return flag.group(0)
+    if "⚡" in raw:
+        return _BOLT
+    return ""
 
 
 def _domain(link: str) -> str:
@@ -159,38 +190,42 @@ def _parse_fields(text: str) -> dict[str, str]:
 def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     """Assemble the final Telegram-HTML post from parsed fields.
 
-    Every model-produced field is sanitized (stray CJK/foreign glyphs removed)
-    and the body has any forbidden phrases stripped before HTML-escaping.
+    Layout (no headline):
+
+        [⚡️/flag] <body, up to 3 sentences>
+
+        `TICKER: $price (↓X%) · ...`   (monospace, only if prices present)
+
+        ◉ Официально / ◎ Слух · <Source>
+
+    Every model field is sanitized (stray CJK/foreign glyphs and URLs removed)
+    and forbidden phrases are stripped before HTML-escaping.
     """
     e = html.escape
 
-    headline = sanitize_text(fields.get("ЗАГОЛОВОК") or item.title or "")
-    headline = headline.rstrip(".").upper()
+    prefix = _clean_prefix(fields.get("ПРЕФИКС", ""))
 
-    body = sanitize_text(fields.get("ТЕКСТ") or item.summary or item.title or "")
+    body = sanitize_text(_strip_urls(
+        fields.get("ТЕКСТ") or item.summary or item.title or ""
+    ))
     body = _strip_forbidden(body)
-    impact = sanitize_text(fields.get("ВЛИЯНИЕ") or "среднее → нейтральное")
-    assets = sanitize_text(fields.get("АКТИВЫ") or "—")
+
+    tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 
     label = credibility_label(item)
     name = item.source_name or "Источник"
     link = item.link or ""
-
     if link:
         source_part = f'{label} · <a href="{e(link, quote=True)}">{e(name)}</a>'
     else:
         source_part = f"{label} · {e(name)}"
 
-    lines = [
-        f"<b>{e(headline)}</b>",
-        "",
-        e(body),
-        "",
-        f"Влияние: {e(impact)}",
-        f"Активы: {e(assets)}",
-        "",
-        source_part,
-    ]
+    # The prefix is a trusted emoji (bolt or flag); the body is HTML-escaped.
+    first_line = f"{prefix} {e(body)}".strip() if prefix else e(body)
+    lines = [first_line]
+    if tickers:
+        lines += ["", f"<code>{e(tickers)}</code>"]
+    lines += ["", source_part]
     return "\n".join(lines)
 
 

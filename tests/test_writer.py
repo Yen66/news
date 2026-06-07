@@ -3,40 +3,84 @@ from src.ai.writer import (
     credibility_label,
     is_established_source,
     sanitize_text,
+    _clean_prefix,
     _parse_fields,
     _render_post,
     _strip_forbidden,
+    _strip_urls,
 )
 from tests.conftest import FakeAIClient, make_item
 
+# A full drop with prefix + ticker line.
 FIELDS = (
-    "ЗАГОЛОВОК: Биткоин пробил 100k\n"
-    "ТЕКСТ: Биткоин вырос на 5% до 100000 долларов. Приток в ETF составил "
-    "1 млрд долларов за день. Спрос со стороны институционалов ускоряется.\n"
-    "ВЛИЯНИЕ: высокое ↑ бычье\n"
-    "АКТИВЫ: BTC, ETH"
+    "ПРЕФИКС: ⚡️\n"
+    "ТЕКСТ: Биткоин и эфир потеряли $390 млрд за неделю — худший обвал с "
+    "краха FTX. Массовые ликвидации давят на рынок. Следующая поддержка BTC — "
+    "$55 000.\n"
+    "ТИКЕРЫ: BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)"
 )
 
 
-async def test_writer_renders_structured_html_post():
+async def test_writer_renders_new_format():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=False)
     item = make_item(
-        "Bitcoin hits 100k",
-        source_name="CoinDesk",
-        link="https://coindesk.com/x",
+        "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x"
     )
     post = await writer.write(item)
     b = post.body
-    assert "<b>БИТКОИН ПРОБИЛ 100K</b>" in b
-    assert "Влияние: высокое ↑ бычье" in b
-    assert "Активы: BTC, ETH" in b
-    assert '<a href="https://coindesk.com/x">CoinDesk</a>' in b
-    assert "◉ Официально" in b
-    # No timestamp / MSK / raw "Источник:" footer anymore.
-    assert "МСК" not in b
-    assert "Время" not in b
-    assert "Источник:" not in b
+    # No bold ALL-CAPS headline.
+    assert "<b>" not in b
+    # Body present, starts with the bolt prefix.
+    assert b.startswith("⚡️ Биткоин и эфир потеряли $390")
+    # Monospace ticker line.
+    assert "<code>BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)</code>" in b
+    # Source line last, clickable name, no visible raw URL text in body.
+    assert b.strip().endswith(
+        '◉ Официально · <a href="https://coindesk.com/x">CoinDesk</a>'
+    )
+    # Forbidden leftovers gone.
+    for bad in ("МСК", "Время:", "Суть:", "Влияние:", "Активы:", "Метка:"):
+        assert bad not in b
+
+
+async def test_no_ticker_line_when_absent():
+    fields = (
+        "ПРЕФИКС: 🇺🇸\n"
+        "ТЕКСТ: SEC одобрила восемь спотовых ETF на Ethereum, торги стартуют "
+        "23 июля. Это открывает институциональный доступ к ETH.\n"
+        "ТИКЕРЫ: "
+    )
+    ai = FakeAIClient(reply=fields)
+    writer = PostWriter(ai, enable_editor=False)
+    post = await writer.write(
+        make_item("x", source_name="Reuters", link="https://reuters.com/a")
+    )
+    assert "<code>" not in post.body
+    assert post.body.startswith("🇺🇸 SEC одобрила")
+    assert post.body.strip().endswith(
+        '◉ Официально · <a href="https://reuters.com/a">Reuters</a>'
+    )
+
+
+async def test_no_prefix_when_empty():
+    fields = "ПРЕФИКС: \nТЕКСТ: Рынок вырос на 3%.\nТИКЕРЫ: "
+    ai = FakeAIClient(reply=fields)
+    writer = PostWriter(ai, enable_editor=False)
+    post = await writer.write(
+        make_item("x", source_name="Blog", link="https://b.io/a")
+    )
+    assert post.body.startswith("Рынок вырос на 3%")
+    assert "◎ Слух · " in post.body
+
+
+def test_clean_prefix():
+    assert _clean_prefix("⚡️") == "⚡️"
+    assert _clean_prefix("⚡") == "⚡️"
+    assert _clean_prefix("🇺🇸") == "🇺🇸"
+    assert _clean_prefix("🇷🇺 что-то") == "🇷🇺"
+    assert _clean_prefix("") == ""
+    assert _clean_prefix("просто текст") == ""
 
 
 def test_established_sources_are_official():
@@ -72,32 +116,30 @@ def test_gov_domain_is_official():
 
 def test_parse_fields_is_lenient():
     f = _parse_fields(
-        "заголовок: Тест\nтекст: Раз два три\n"
-        "влияние: низкое → нейтральное\nактивы: BTC"
+        "префикс: ⚡️\nтекст: Раз два три\nтикеры: BTC: $1 (↑1%)"
     )
-    assert f["ЗАГОЛОВОК"] == "Тест"
+    assert f["ПРЕФИКС"] == "⚡️"
     assert f["ТЕКСТ"] == "Раз два три"
-    assert f["АКТИВЫ"] == "BTC"
+    assert f["ТИКЕРЫ"] == "BTC: $1 (↑1%)"
 
 
 def test_render_fallback_when_fields_missing():
-    item = make_item("Fallback Title", source_name="Decrypt", link="https://d.co/a")
+    item = make_item("Fallback text", source_name="SomeBlog", link="https://d.co/a")
     body = _render_post({}, item)
-    assert "<b>FALLBACK TITLE</b>" in body  # uppercased headline fallback
-    assert "Влияние:" in body
-    assert "Активы:" in body
+    assert body.startswith("Fallback text")
+    assert "<code>" not in body  # no ticker line
+    assert body.strip().endswith(
+        '◎ Слух · <a href="https://d.co/a">SomeBlog</a>'
+    )
 
 
 def test_html_is_escaped():
-    fields = (
-        "ЗАГОЛОВОК: A & B\nТЕКСТ: 5 < 10 > 3 рост\n"
-        "ВЛИЯНИЕ: среднее → нейтральное\nАКТИВЫ: BTC"
-    )
+    fields = "ТЕКСТ: 5 < 10 > 3 рост A & B\nТИКЕРЫ: "
     body = _render_post(_parse_fields(fields), make_item(
         "x", source_name="A&B", link="https://a.com"))
-    assert "&amp;" in body
     assert "&lt;" in body
     assert "&gt;" in body
+    assert "&amp;" in body
 
 
 async def test_editor_runs_for_established_source():
@@ -121,46 +163,44 @@ async def test_editor_skipped_for_unknown_low_impact():
 
 
 def test_sanitize_strips_cjk_keeps_russian_latin_arrows():
-    # The exact bug from the report: Chinese chars inside a Russian word.
     assert sanitize_text("затрагивает主要ые активы") == "затрагиваетые активы"
-    # Arrows and tickers must survive.
     assert sanitize_text("высокое ↑ бычье BTC 100000") == (
         "высокое ↑ бычье BTC 100000"
     )
-    # Japanese / Korean / emoji-like glyphs removed.
     assert "日本" not in sanitize_text("рынок 日本 растёт")
-    assert sanitize_text("цена $100 и €50") == "цена $100 и €50"
+    assert sanitize_text("цена $100 и €50 · BTC") == "цена $100 и €50 · BTC"
 
 
 def test_render_strips_cjk_from_fields():
     fields = _parse_fields(
-        "ЗАГОЛОВОК: Биткоин 主要 растёт\n"
-        "ТЕКСТ: Цена выросла на 5%主要 за день.\n"
-        "ВЛИЯНИЕ: высокое ↑ бычье\n"
-        "АКТИВЫ: BTC"
+        "ТЕКСТ: Цена выросла на 5%主要 за день.\nТИКЕРЫ: BTC: $1主要 (↑1%)"
     )
     body = _render_post(fields, make_item("x", source_name="CoinDesk",
                                           link="https://coindesk.com/a"))
     assert "主要" not in body
-    assert "↑ бычье" in body
+
+
+def test_strip_urls():
+    assert _strip_urls("текст https://a.com/x хвост").strip() == "текст  хвост".strip()
+    assert "http" not in _strip_urls("see http://x.io now")
+    assert "t.me" not in _strip_urls("канал t.me/foo тут")
 
 
 def test_strip_forbidden_phrases():
     assert "Суть:" not in _strip_forbidden("Суть: Биткоин вырос")
-    assert "Оценка:" not in _strip_forbidden("Оценка: высокое")
+    assert "Метка:" not in _strip_forbidden("Метка: официально")
+    assert "Время:" not in _strip_forbidden("Время: 12:00")
     assert "не указана" not in _strip_forbidden("Дата не указана сегодня")
 
 
-async def test_render_removes_forbidden_in_body():
-    fields = (
-        "ЗАГОЛОВОК: Тест\nТЕКСТ: Суть: Биткоин вырос на 10%.\n"
-        "ВЛИЯНИЕ: высокое ↑ бычье\nАКТИВЫ: BTC"
-    )
+async def test_render_removes_forbidden_and_urls_in_body():
+    fields = "ТЕКСТ: Суть: Биткоин вырос на 10%. Подробнее https://x.io/a\nТИКЕРЫ: "
     ai = FakeAIClient(reply=fields)
     writer = PostWriter(ai, enable_editor=False)
     post = await writer.write(make_item("x", source_name="Blog",
                                         link="https://b.io/a"))
     assert "Суть:" not in post.body
+    assert "https://x.io" not in post.body
 
 
 async def test_post_official_reflects_source():
