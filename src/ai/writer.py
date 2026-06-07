@@ -17,12 +17,16 @@ from __future__ import annotations
 import html
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
 from ..models import NewsItem, Post
 from .factory import AIClient
 
 log = logging.getLogger(__name__)
+
+# How fresh a story must be for the ⚡️ breaking prefix.
+BREAKING_WINDOW = timedelta(hours=2)
 
 # Established outlets / authorities -> "Официально". Matched against the source
 # name and the link domain (case-insensitive substring). Everything else
@@ -54,9 +58,13 @@ _WRITER_SYSTEM = (
     "Википедии.\n\n"
     "Правила:\n"
     "- НЕ пиши заголовок. Начинай сразу с ключевого факта.\n"
+    "- Пиши как телеграфный репортёр (wire reporter), а не как аналитик.\n"
+    "- КАЖДОЕ предложение обязано содержать конкретный факт: число, имя, дату "
+    "или цену. Безжалостно вырезай предложения с общими рассуждениями без "
+    "конкретики. Плохо: «Инвесторам необходимо пересмотреть свои стратегии». "
+    "Хорошо: «Следующий уровень поддержки BTC — $55 000».\n"
     "- Первое предложение обязательно содержит конкретное число или цитату.\n"
     "- Максимум 3 предложения. Активный залог, цифры в начале.\n"
-    "- Простыми словами объясни, почему это важно криптоинвестору.\n"
     "- Цитаты влиятельных людей оформляй строго так: "
     "Имя (Должность): «цитата».\n"
     "- Только русский язык; латиница допустима лишь для тикеров и имён "
@@ -70,10 +78,15 @@ _WRITER_SYSTEM = (
     "ПРЕФИКС: <пусто; либо ⚡️ если новость действительно срочная/прорывная; "
     "либо флаг страны (🇺🇸 🇷🇺 🇨🇳 🇪🇺 и т.п.), если это новость о "
     "регулировании или политике конкретной страны>\n"
-    "ТЕКСТ: <до 3 предложений; начни с числа или цитаты>\n"
-    "ТИКЕРЫ: <если в материале есть цены или проценты — одна строка вида "
-    "\"BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)\"; ↑ для роста, ↓ для "
-    "падения; если цен нет — оставь поле пустым>"
+    "ТЕКСТ: <до 3 предложений; начни с числа или цитаты; в каждом предложении "
+    "конкретный факт>\n"
+    "ТИКЕРЫ: <активно извлекай ценовые данные из материала. Если упомянуты "
+    "любая цена, процентное изменение или капитализация — обязательно добавь "
+    "строку вида \"BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)\". Если точных "
+    "цен нет, всё равно покажи проценты или сумму потерь в формате тикера, "
+    "например \"Капитализация: -$390 млрд · BTC ↓7,25% · ETH ↓12,3%\". "
+    "↑ для роста, ↓ для падения. Если в материале нет ни цен, ни процентов, "
+    "ни капитализации — оставь поле пустым>"
 )
 
 _WRITER_TEMPLATE = (
@@ -139,6 +152,33 @@ def _strip_forbidden(text: str) -> str:
     for phrase in _FORBIDDEN_PHRASES:
         text = re.sub(re.escape(phrase), "", text, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", text).strip()
+
+
+# A sentence is "concrete" if it carries a number, currency, percent, a quote,
+# or a Latin token (ticker/name like BTC, SEC, Coinbase).
+_CONCRETE_RE = re.compile(r"[0-9$€£₽₿%]|«|»|[A-Za-z]{2,}")
+
+
+def _keep_concrete_sentences(text: str) -> str:
+    """Drop concept-only filler sentences; always keep the lead sentence."""
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", text.strip()) if p.strip()]
+    if not parts:
+        return text.strip()
+    kept = [parts[0]]
+    for sentence in parts[1:]:
+        if _CONCRETE_RE.search(sentence):
+            kept.append(sentence)
+    return " ".join(kept).strip()
+
+
+def _is_recent(item: NewsItem, window: timedelta = BREAKING_WINDOW) -> bool:
+    """True if the article was published within ``window`` (default 2h)."""
+    pub = item.published
+    if pub is None:
+        return False
+    if pub.tzinfo is None:
+        pub = pub.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - pub <= window
 
 
 def _clean_prefix(raw: str) -> str:
@@ -255,11 +295,15 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     e = html.escape
 
     prefix = _clean_prefix(fields.get("ПРЕФИКС", ""))
+    # ⚡️ only for news published within the last 2 hours; flags are not gated.
+    if prefix == _BOLT and not _is_recent(item):
+        prefix = ""
 
     body = sanitize_text(_strip_urls(
         fields.get("ТЕКСТ") or item.summary or item.title or ""
     ))
     body = _strip_forbidden(body)
+    body = _keep_concrete_sentences(body)
 
     tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 

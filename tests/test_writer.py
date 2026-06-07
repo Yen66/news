@@ -1,15 +1,24 @@
+from datetime import datetime, timedelta, timezone
+
 from src.ai.writer import (
     PostWriter,
     credibility_label,
     is_established_source,
     sanitize_text,
     _clean_prefix,
+    _is_recent,
+    _keep_concrete_sentences,
     _parse_fields,
     _render_post,
     _strip_forbidden,
     _strip_urls,
 )
 from tests.conftest import FakeAIClient, make_item
+
+
+def _now():
+    return datetime.now(timezone.utc)
+
 
 # A full drop with prefix + ticker line.
 FIELDS = (
@@ -25,30 +34,91 @@ async def test_writer_renders_new_format():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=False)
     item = make_item(
-        "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x"
+        "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        published=_now(),  # recent => ⚡️ kept
     )
     post = await writer.write(item)
     b = post.body
     # No bold ALL-CAPS headline.
     assert "<b>" not in b
-    # Body present, starts with the bolt prefix.
+    # Body present, starts with the bolt prefix (article is fresh).
     assert b.startswith("⚡️ Биткоин и эфир потеряли $390")
+    # Concept-only middle sentence is dropped; concrete ones kept.
+    assert "Массовые ликвидации" not in b
+    assert "Следующая поддержка BTC" in b
     # Monospace ticker line.
     assert "<code>BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)</code>" in b
     # Source line last, clickable name, no visible raw URL text in body.
     assert b.strip().endswith(
         '◉ Официально · <a href="https://coindesk.com/x">CoinDesk</a>'
     )
-    # Forbidden leftovers gone.
     for bad in ("МСК", "Время:", "Суть:", "Влияние:", "Активы:", "Метка:"):
         assert bad not in b
+
+
+async def test_bolt_dropped_when_article_is_old():
+    ai = FakeAIClient(reply=FIELDS)
+    writer = PostWriter(ai, enable_editor=False)
+    item = make_item(
+        "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        published=_now() - timedelta(hours=5),  # stale => no ⚡️
+    )
+    post = await writer.write(item)
+    assert not post.body.startswith("⚡️")
+    assert post.body.startswith("Биткоин и эфир потеряли $390")
+
+
+async def test_bolt_dropped_when_no_pubdate():
+    ai = FakeAIClient(reply=FIELDS)
+    writer = PostWriter(ai, enable_editor=False)
+    item = make_item("Crypto crash", source_name="CoinDesk",
+                     link="https://coindesk.com/x", published=None)
+    post = await writer.write(item)
+    assert not post.body.startswith("⚡️")
+
+
+async def test_flag_prefix_not_time_gated():
+    fields = (
+        "ПРЕФИКС: 🇺🇸\n"
+        "ТЕКСТ: SEC одобрила восемь спотовых ETF на Ethereum 23 июля.\n"
+        "ТИКЕРЫ: "
+    )
+    ai = FakeAIClient(reply=fields)
+    writer = PostWriter(ai, enable_editor=False)
+    item = make_item("x", source_name="Reuters", link="https://reuters.com/a",
+                     published=_now() - timedelta(days=3))  # old, flag stays
+    post = await writer.write(item)
+    assert post.body.startswith("🇺🇸 SEC одобрила")
+
+
+def test_keep_concrete_sentences_drops_filler():
+    text = (
+        "Биткоин упал на 7% до $59 000. Инвесторам необходимо пересмотреть "
+        "свои стратегии. Поддержка BTC на уровне $55 000."
+    )
+    out = _keep_concrete_sentences(text)
+    assert "Инвесторам необходимо" not in out
+    assert "$59 000" in out
+    assert "$55 000" in out
+
+
+def test_keep_concrete_always_keeps_lead():
+    # Even a vague lead is kept (it is the required opener).
+    text = "Рынок остаётся напряжённым. И это всё."
+    out = _keep_concrete_sentences(text)
+    assert out.startswith("Рынок остаётся напряжённым")
+
+
+def test_is_recent():
+    assert _is_recent(make_item("x", published=_now()))
+    assert not _is_recent(make_item("x", published=_now() - timedelta(hours=3)))
+    assert not _is_recent(make_item("x", published=None))
 
 
 async def test_no_ticker_line_when_absent():
     fields = (
         "ПРЕФИКС: 🇺🇸\n"
-        "ТЕКСТ: SEC одобрила восемь спотовых ETF на Ethereum, торги стартуют "
-        "23 июля. Это открывает институциональный доступ к ETH.\n"
+        "ТЕКСТ: SEC одобрила восемь спотовых ETF на Ethereum 23 июля.\n"
         "ТИКЕРЫ: "
     )
     ai = FakeAIClient(reply=fields)
@@ -57,7 +127,6 @@ async def test_no_ticker_line_when_absent():
         make_item("x", source_name="Reuters", link="https://reuters.com/a")
     )
     assert "<code>" not in post.body
-    assert post.body.startswith("🇺🇸 SEC одобрила")
     assert post.body.strip().endswith(
         '◉ Официально · <a href="https://reuters.com/a">Reuters</a>'
     )
