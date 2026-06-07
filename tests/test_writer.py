@@ -1,74 +1,131 @@
-from src.ai.writer import PostWriter, _format_footer, _ensure_label
+from src.ai.writer import (
+    PostWriter,
+    credibility_label,
+    is_established_source,
+    _parse_fields,
+    _render_post,
+)
 from tests.conftest import FakeAIClient, make_item
 
-
-async def test_writer_one_call_for_normal_post():
-    ai = FakeAIClient(reply="Суть новости. Рост BTC.")
-    writer = PostWriter(ai, enable_editor=True)
-    item = make_item("Bitcoin rallies", impact=40, official=False)
-    post = await writer.write(item)
-    # Normal (not important) => single writer call, no editor.
-    assert len(ai.calls) == 1
-    assert not post.editor_used
-    assert post.provider_used == "groq"
-    assert "Источник:" in post.body
-    assert "МСК" in post.body
+FIELDS = (
+    "ЗАГОЛОВОК: Биткоин пробил 100k\n"
+    "ТЕКСТ: Биткоин вырос на 5% до 100000 долларов. Приток в ETF составил "
+    "1 млрд долларов за день. Спрос со стороны институционалов ускоряется.\n"
+    "ВЛИЯНИЕ: высокое ↑ бычье\n"
+    "АКТИВЫ: BTC, ETH"
+)
 
 
-async def test_writer_editor_runs_for_official():
-    ai = FakeAIClient(reply="Официально. Суть. Падение акций.")
-    writer = PostWriter(ai, enable_editor=True)
-    item = make_item("SEC charges firm", official=True, impact=85)
-    post = await writer.write(item)
-    assert len(ai.calls) == 2  # writer + editor
-    assert post.editor_used
-
-
-async def test_writer_editor_disabled():
-    ai = FakeAIClient(reply="Официально. Текст.")
+async def test_writer_renders_structured_html_post():
+    ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=False)
-    item = make_item("SEC charges firm", official=True, impact=85)
+    item = make_item(
+        "Bitcoin hits 100k",
+        source_name="CoinDesk",
+        link="https://coindesk.com/x",
+    )
     post = await writer.write(item)
-    assert len(ai.calls) == 1
-    assert not post.editor_used
+    b = post.body
+    assert "<b>БИТКОИН ПРОБИЛ 100K</b>" in b
+    assert "Влияние: высокое ↑ бычье" in b
+    assert "Активы: BTC, ETH" in b
+    assert '<a href="https://coindesk.com/x">CoinDesk</a>' in b
+    assert "◉ Официально" in b
+    # No timestamp / MSK / raw "Источник:" footer anymore.
+    assert "МСК" not in b
+    assert "Время" not in b
+    assert "Источник:" not in b
 
 
-async def test_writer_editor_failure_falls_back_to_draft():
-    ai = FakeAIClient(reply="Официально. Черновик.")
-    ai.fail_times = 1  # writer succeeds, editor (2nd call) fails first
-    # fail_times applies to the next call(s); writer is first call.
+def test_established_sources_are_official():
+    assert is_established_source(
+        make_item("x", source_name="CoinDesk", link="https://www.coindesk.com/a")
+    )
+    assert is_established_source(
+        make_item("x", source_name="Reuters", link="https://reuters.com/a")
+    )
+    assert is_established_source(make_item("x", official=True))
+    assert is_established_source(
+        make_item("x", source_name="SEC", link="https://www.sec.gov/news")
+    )
+
+
+def test_unknown_sources_are_rumor():
+    assert not is_established_source(
+        make_item("x", source_name="Random Blog", link="https://randomblog.xyz/a")
+    )
+    assert credibility_label(
+        make_item("x", source_name="cryptoguy", link="https://t.me/cryptoguy")
+    ) == "◎ Слух"
+    assert credibility_label(
+        make_item("x", source_name="Bloomberg", link="https://bloomberg.com")
+    ) == "◉ Официально"
+
+
+def test_gov_domain_is_official():
+    assert is_established_source(
+        make_item("x", source_name="Treasury", link="https://home.treasury.gov/n")
+    )
+
+
+def test_parse_fields_is_lenient():
+    f = _parse_fields(
+        "заголовок: Тест\nтекст: Раз два три\n"
+        "влияние: низкое → нейтральное\nактивы: BTC"
+    )
+    assert f["ЗАГОЛОВОК"] == "Тест"
+    assert f["ТЕКСТ"] == "Раз два три"
+    assert f["АКТИВЫ"] == "BTC"
+
+
+def test_render_fallback_when_fields_missing():
+    item = make_item("Fallback Title", source_name="Decrypt", link="https://d.co/a")
+    body = _render_post({}, item)
+    assert "<b>FALLBACK TITLE</b>" in body  # uppercased headline fallback
+    assert "Влияние:" in body
+    assert "Активы:" in body
+
+
+def test_html_is_escaped():
+    fields = (
+        "ЗАГОЛОВОК: A & B\nТЕКСТ: 5 < 10 > 3 рост\n"
+        "ВЛИЯНИЕ: среднее → нейтральное\nАКТИВЫ: BTC"
+    )
+    body = _render_post(_parse_fields(fields), make_item(
+        "x", source_name="A&B", link="https://a.com"))
+    assert "&amp;" in body
+    assert "&lt;" in body
+    assert "&gt;" in body
+
+
+async def test_editor_runs_for_established_source():
+    ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=True)
-    # Make writer succeed and editor fail: set fail on second call only.
-    ai.fail_times = 0
-    # Simulate editor failure by monkeypatching after first call.
-    calls = {"n": 0}
-    orig_reply = ai.reply
-
-    async def flaky(system, user, *, temperature=0.4, max_tokens=800):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            raise RuntimeError("editor down")
-        return orig_reply, "groq"
-
-    ai.complete = flaky  # type: ignore[assignment]
-    item = make_item("SEC charges firm", official=True, impact=85)
+    item = make_item("x", source_name="CoinDesk", link="https://coindesk.com/x")
     post = await writer.write(item)
-    assert not post.editor_used  # editor failed, draft kept
-    assert "Официально" in post.body
+    assert post.editor_used
+    assert len(ai.calls) == 2  # writer + editor
 
 
-def test_ensure_label_adds_when_missing():
-    assert "Официально" in _ensure_label("Просто текст", official=True)
-    assert "не подтверждено" in _ensure_label("Просто текст", official=False)
+async def test_editor_skipped_for_unknown_low_impact():
+    ai = FakeAIClient(reply=FIELDS)
+    writer = PostWriter(ai, enable_editor=True)
+    item = make_item(
+        "x", source_name="Random Blog", link="https://blog.xyz/a", impact=30
+    )
+    post = await writer.write(item)
+    assert not post.editor_used
+    assert len(ai.calls) == 1
 
 
-def test_ensure_label_keeps_existing():
-    body = "Текст\n\nОфициально"
-    assert _ensure_label(body, official=True) == body
-
-
-def test_footer_has_msk_and_link():
-    item = make_item("x", link="https://example.com/a")
-    footer = _format_footer(item)
-    assert "МСК" in footer
-    assert "https://example.com/a" in footer
+async def test_post_official_reflects_source():
+    ai = FakeAIClient(reply=FIELDS)
+    writer = PostWriter(ai, enable_editor=False)
+    official = await writer.write(
+        make_item("x", source_name="CNBC", link="https://cnbc.com/a")
+    )
+    rumor = await writer.write(
+        make_item("x", source_name="SomeBlog", link="https://b.io/a")
+    )
+    assert official.official is True
+    assert rumor.official is False

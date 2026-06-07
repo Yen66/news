@@ -43,7 +43,15 @@ class TelegramClient:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    async def _send(self, chat_id: str, text: str, target: str = "chat") -> bool:
+    async def _send(
+        self,
+        chat_id: str,
+        text: str,
+        target: str = "chat",
+        *,
+        parse_mode: Optional[str] = None,
+        disable_preview: bool = False,
+    ) -> bool:
         if self._dry_run:
             log.info("[DRY_RUN] -> %s (%s):\n%s", chat_id, target, text)
             return True
@@ -53,8 +61,10 @@ class TelegramClient:
         payload = {
             "chat_id": chat_id,
             "text": text[:_MAX_LEN],
-            "disable_web_page_preview": False,
+            "disable_web_page_preview": disable_preview,
         }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         # Small retry loop for transient errors / 429.
         for attempt in range(3):
             try:
@@ -106,8 +116,14 @@ class TelegramClient:
         return False
 
     async def publish(self, text: str) -> bool:
-        """Publish a post to the channel."""
-        return await self._send(self._channel_id, text, target="channel")
+        """Publish a post to the channel (HTML-formatted, no link preview)."""
+        return await self._send(
+            self._channel_id,
+            text,
+            target="channel",
+            parse_mode="HTML",
+            disable_preview=True,
+        )
 
     async def alert_admin(self, text: str) -> bool:
         """Send an operational alert to the admin (errors, lifecycle)."""
