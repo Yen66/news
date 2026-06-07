@@ -70,6 +70,40 @@ async def test_failed_publish_is_not_marked_seen():
     assert repo.archived == []
 
 
+async def test_ai_call_spacing_enforced(monkeypatch):
+    import src.pipeline.processor as proc_mod
+
+    proc, telegram, repo, dedup, budget = _build()
+    proc._ai_min_interval = 15.0
+
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    # Pretend an AI call happened 1s ago via monotonic; expect ~14s wait.
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(proc_mod.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(proc_mod.asyncio, "sleep", fake_sleep)
+    proc._last_ai_ts = 1000.0
+    clock["t"] = 1001.0  # 1s elapsed
+
+    await proc.process_one(make_item("Bitcoin rallies above 70k"))
+    assert sleeps and abs(sleeps[0] - 14.0) < 0.01
+
+
+async def test_no_spacing_when_interval_zero(monkeypatch):
+    import src.pipeline.processor as proc_mod
+
+    proc, telegram, repo, dedup, budget = _build()
+    proc._ai_min_interval = 0.0
+    slept = []
+    monkeypatch.setattr(proc_mod.asyncio, "sleep",
+                        lambda s: slept.append(s))
+    await proc.process_one(make_item("Bitcoin rallies above 70k"))
+    assert slept == []
+
+
 async def test_queue_priority_orders_by_impact():
     q = ProcessingQueue(max_size=10)
     await q.put(make_item("low", impact=10, guid="l"))

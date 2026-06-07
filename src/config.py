@@ -125,6 +125,7 @@ class Config:
     max_article_age_hours: int
     story_dedup_window_hours: float
     enable_editor: bool
+    ai_call_min_interval_seconds: float
     daily_ai_call_budget: int
     request_timeout_seconds: int
     http_port: int
@@ -150,7 +151,7 @@ _DEFAULT_BASE_URLS = {
 
 _DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",
-    "cerebras": "llama-3.3-70b",
+    "cerebras": "llama3.3-70b",
     "openrouter": "meta-llama/llama-3.3-70b-instruct:free",
     "gemini": "gemini-1.5-flash",
 }
@@ -225,6 +226,9 @@ def load_config() -> Config:
             _get_int("STORY_DEDUP_WINDOW_HOURS", 6)
         ),
         enable_editor=_get_bool("ENABLE_EDITOR", True),
+        ai_call_min_interval_seconds=float(
+            _get_int("AI_CALL_MIN_INTERVAL_SECONDS", 15)
+        ),
         daily_ai_call_budget=_get_int("DAILY_AI_CALL_BUDGET", 1000),
         request_timeout_seconds=_get_int("REQUEST_TIMEOUT_SECONDS", 30),
         http_port=_get_int("PORT", 10000),

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import time
 from typing import Optional
 
 from ..ai.writer import PostWriter
@@ -68,12 +69,27 @@ class Processor:
         repo: Repository,
         dedup: Deduplicator,
         budget: DailyBudget,
+        ai_min_interval: float = 0.0,
     ) -> None:
         self._writer = writer
         self._telegram = telegram
         self._repo = repo
         self._dedup = dedup
         self._budget = budget
+        # Minimum spacing between AI processing calls, to stay under free-tier
+        # RPM limits (e.g. OpenRouter ~8 RPM) when items are queued back-to-back.
+        self._ai_min_interval = ai_min_interval
+        self._last_ai_ts = 0.0
+
+    async def _space_ai_calls(self) -> None:
+        if self._ai_min_interval <= 0:
+            return
+        now = time.monotonic()
+        wait = self._ai_min_interval - (now - self._last_ai_ts)
+        if wait > 0:
+            log.info("Spacing AI calls: waiting %.1fs", wait)
+            await asyncio.sleep(wait)
+        self._last_ai_ts = time.monotonic()
 
     async def process_one(self, item: NewsItem) -> bool:
         """Process a single item end-to-end. Returns True if published."""
@@ -90,6 +106,9 @@ class Processor:
             log.info("Near AI budget, skipping low-impact: %s", item.title)
             return False
 
+        # Enforce minimum spacing only once we're committed to an AI call
+        # (i.e. after the dedup/budget gates above have passed).
+        await self._space_ai_calls()
         try:
             post = await self._writer.write(item)
         except Exception as exc:  # noqa: BLE001 - surfaced as alert by caller

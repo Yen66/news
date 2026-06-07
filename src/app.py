@@ -56,7 +56,8 @@ class NewsBotApp:
         self._queue = ProcessingQueue(config.queue_max_size)
         self._fetcher = FeedFetcher(timeout=config.request_timeout_seconds)
         self._processor = Processor(
-            self._writer, self._telegram, self._repo, self._dedup, self._budget
+            self._writer, self._telegram, self._repo, self._dedup,
+            self._budget, config.ai_call_min_interval_seconds,
         )
 
         self._tasks: list[asyncio.Task] = []
@@ -157,7 +158,8 @@ class NewsBotApp:
         seen_uids, _seen_keys = await self._repo.load_seen()
         self._dedup = Deduplicator(seen_uids)
         self._processor = Processor(
-            self._writer, self._telegram, self._repo, self._dedup, self._budget
+            self._writer, self._telegram, self._repo, self._dedup,
+            self._budget, self._config.ai_call_min_interval_seconds,
         )
         log.info(
             "Startup complete. Sources=%d, seen=%d, providers=%s",

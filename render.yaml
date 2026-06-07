@@ -40,6 +40,8 @@ services:
         value: "6"
       - key: ENABLE_EDITOR
         value: "true"
+      - key: AI_CALL_MIN_INTERVAL_SECONDS
+        value: "15"
       - key: DAILY_AI_CALL_BUDGET
         value: "1000"
       - key: GEMINI_ENABLED

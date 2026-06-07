@@ -1,7 +1,12 @@
 import pytest
 
-from src.ai.factory import AIClient, AllProvidersExhausted, _is_quota_error
-from src.config import Config, ProviderConfig, TelegramConfig
+from src.ai.factory import (
+    AIClient,
+    AllProvidersExhausted,
+    _is_quota_error,
+    _retry_after_seconds,
+)
+from src.config import Config, ProviderConfig, TelegramConfig, _DEFAULT_MODELS
 
 
 def _config(providers):
@@ -15,6 +20,7 @@ def _config(providers):
         max_article_age_hours=24,
         story_dedup_window_hours=6.0,
         enable_editor=True,
+        ai_call_min_interval_seconds=0.0,
         daily_ai_call_budget=100,
         request_timeout_seconds=10,
         http_port=10000,
@@ -79,6 +85,70 @@ async def test_all_exhausted_raises(monkeypatch):
 
     with pytest.raises(AllProvidersExhausted):
         await client.complete("sys", "user")
+
+
+def test_cerebras_default_model_name():
+    # Cerebras uses "llama3.3-70b" (no hyphen after llama), unlike Groq.
+    assert _DEFAULT_MODELS["cerebras"] == "llama3.3-70b"
+    assert _DEFAULT_MODELS["groq"] == "llama-3.3-70b-versatile"
+
+
+def test_retry_after_parsing():
+    class _H(Exception):
+        def __init__(self):
+            self.response = type("R", (), {"headers": {"retry-after": "4"}})()
+
+    assert _retry_after_seconds(_H()) == 4.0
+
+    class _B(Exception):
+        body = {"error": {"retry_after_seconds": 7}}
+
+    assert _retry_after_seconds(_B()) == 7.0
+    assert _retry_after_seconds(RuntimeError("Please try again in 3s")) == 3.0
+    assert _retry_after_seconds(RuntimeError("try again in 500ms")) == 0.5
+    assert _retry_after_seconds(RuntimeError("no hint here")) is None
+
+
+async def test_retries_once_with_retry_after_then_succeeds(monkeypatch):
+    cfg = _config([_provider("groq", 1), _provider("cerebras", 2)])
+    client = AIClient(cfg)
+    calls = {"n": 0}
+
+    class _RL(Exception):
+        status_code = 429
+        body = {"retry_after_seconds": 0}  # 0s wait keeps the test instant
+
+    async def groq_then_ok(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise _RL()
+        return "recovered"
+
+    client._providers[0].complete = groq_then_ok  # type: ignore[assignment]
+    text, provider = await client.complete("s", "u")
+    assert text == "recovered"
+    assert provider == "groq"           # retried same provider, did not rotate
+    assert calls["n"] == 2
+
+
+async def test_rotates_when_no_retry_after(monkeypatch):
+    cfg = _config([_provider("groq", 1), _provider("cerebras", 2)])
+    client = AIClient(cfg)
+
+    class _RL(Exception):
+        status_code = 429  # no retry-after hint anywhere
+
+    async def groq_fail(*a, **k):
+        raise _RL()
+
+    async def cerebras_ok(*a, **k):
+        return "ok"
+
+    client._providers[0].complete = groq_fail  # type: ignore[assignment]
+    client._providers[1].complete = cerebras_ok  # type: ignore[assignment]
+    text, provider = await client.complete("s", "u")
+    assert text == "ok"
+    assert provider == "cerebras"
 
 
 def test_provider_order_by_priority():
