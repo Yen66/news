@@ -12,6 +12,8 @@ def _config(providers):
         poll_interval_seconds=30,
         queue_max_size=10,
         max_new_per_cycle=5,
+        max_article_age_hours=24,
+        story_dedup_window_hours=6.0,
         enable_editor=True,
         daily_ai_call_budget=100,
         request_timeout_seconds=10,

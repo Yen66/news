@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Optional
 
 from aiohttp import web
@@ -22,6 +23,7 @@ from .ai.writer import PostWriter
 from .config import Config
 from .db.repository import build_repository
 from .pipeline.dedup import Deduplicator
+from .pipeline.story import StoryDeduplicator
 from .pipeline.filters import filter_items, score_impact, should_publish
 from .pipeline.processor import Processor, ProcessingQueue
 from .pipeline.throttle import DailyBudget
@@ -49,6 +51,7 @@ class NewsBotApp:
         )
         self._repo = build_repository(config.database_url)
         self._dedup = Deduplicator()
+        self._story_dedup = StoryDeduplicator(config.story_dedup_window_hours)
         self._budget = DailyBudget(config.daily_ai_call_budget)
         self._queue = ProcessingQueue(config.queue_max_size)
         self._fetcher = FeedFetcher(timeout=config.request_timeout_seconds)
@@ -72,6 +75,7 @@ class NewsBotApp:
             "poller_alive": poller_alive,
             "queue_size": self._queue.size,
             "seen_ids": self._dedup.size,
+            "story_window": self._story_dedup.size,
             "published_total": self._published_total,
             "ai_budget_used": self._budget.used,
             "ai_budget_remaining": self._budget.remaining,
@@ -150,8 +154,8 @@ class NewsBotApp:
         await self._repo.connect()
         await self._telegram.start()
         await self._fetcher.start()
-        seen_uids, seen_keys = await self._repo.load_seen()
-        self._dedup = Deduplicator(seen_uids, seen_keys)
+        seen_uids, _seen_keys = await self._repo.load_seen()
+        self._dedup = Deduplicator(seen_uids)
         self._processor = Processor(
             self._writer, self._telegram, self._repo, self._dedup, self._budget
         )
@@ -201,6 +205,31 @@ class NewsBotApp:
                 pass
         log.info("Poller task stopped.")
 
+    def _filter_by_age(self, items: list) -> list:
+        """Keep only articles published within MAX_ARTICLE_AGE_HOURS.
+
+        Missing pubDate => treated as potentially old and skipped. Skipped
+        items are marked seen (in-memory) so they are not re-evaluated every
+        cycle. Nothing is persisted, so they never pollute the archive.
+        """
+        from datetime import timedelta
+
+        max_age = timedelta(hours=self._config.max_article_age_hours)
+        now = datetime.now(timezone.utc)
+        recent = []
+        for item in items:
+            pub = item.published
+            if pub is None:
+                self._dedup.mark(item)
+                continue
+            if pub.tzinfo is None:
+                pub = pub.replace(tzinfo=timezone.utc)
+            if now - pub > max_age:
+                self._dedup.mark(item)
+                continue
+            recent.append(item)
+        return recent
+
     async def _poll_once(self) -> None:
         self._poll_count += 1
         cycle = self._poll_count
@@ -215,26 +244,43 @@ class NewsBotApp:
                 bucket.append(item.link or item.guid or item.title[:60])
         for src_id, links in samples.items():
             log.info("Poll #%d sample %s: %s", cycle, src_id, links)
-        kept = filter_items(raw)                 # keyword + ads + opinion gate
-        fresh = self._dedup.filter_new(kept)     # exact + fuzzy dedup
-        # Sort by impact so high-impact items enter the queue first.
+
+        # 1) Age filter — before any processing. Older than the limit (or no
+        #    pubDate at all) is marked seen silently and skipped, so archive
+        #    spam from a newly-added feed never reaches the AI/channel.
+        recent = self._filter_by_age(raw)
+        age_skipped = len(raw) - len(recent)
+
+        kept = filter_items(recent)              # keyword + ads + opinion gate
+        fresh = self._dedup.filter_new(kept)     # exact (same-article) dedup
+        # Highest-impact first so they win both the per-cycle cap and any
+        # cross-source story collision.
         fresh.sort(key=lambda i: i.impact, reverse=True)
-        # Cap how many we queue per cycle to avoid flooding the channel when a
-        # burst of items arrives at once; highest-impact ones go first, the
-        # rest are caught on subsequent cycles (they stay "new" until posted).
+
+        # 2) Cross-source story dedup (6h window) + 3) per-cycle burst cap.
         cap = self._config.max_new_per_cycle
-        selected = fresh[:cap] if cap > 0 else fresh
         queued = 0
-        for item in selected:
+        story_skipped = 0
+        for item in fresh:
+            if cap > 0 and queued >= cap:
+                break
+            if self._story_dedup.is_recent(item):
+                story_skipped += 1
+                continue
             if await self._queue.put(item):
+                self._story_dedup.mark(item)
                 queued += 1
+
         # Log EVERY cycle so the poller's liveness is always visible.
         log.info(
-            "Poll #%d: fetched=%d kept=%d new=%d queued=%d (cap=%d) per_source=%s",
+            "Poll #%d: fetched=%d old=%d kept=%d new=%d story_dup=%d "
+            "queued=%d (cap=%d) per_source=%s",
             cycle,
             len(raw),
+            age_skipped,
             len(kept),
             len(fresh),
+            story_skipped,
             queued,
             cap,
             dict(by_source),

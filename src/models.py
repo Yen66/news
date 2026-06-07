@@ -5,7 +5,117 @@ import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
+
+# Coin / asset names normalised to a canonical ticker so that the same story
+# from sources that use names vs tickers collapses together
+# (e.g. "Bitcoin" and "BTC" -> "btc").
+_COIN_ALIASES = {
+    "bitcoin": "btc", "btc": "btc",
+    "ethereum": "eth", "ether": "eth", "eth": "eth",
+    "solana": "sol", "sol": "sol",
+    "ripple": "xrp", "xrp": "xrp",
+    "dogecoin": "doge", "doge": "doge",
+    "cardano": "ada", "ada": "ada",
+    "binance": "bnb", "bnb": "bnb",
+    "litecoin": "ltc", "ltc": "ltc",
+    "polkadot": "dot", "dot": "dot",
+    "chainlink": "link", "link": "link",
+    "polygon": "matic", "matic": "matic",
+    "toncoin": "ton", "ton": "ton",
+    "tron": "trx", "trx": "trx",
+    "avalanche": "avax", "avax": "avax",
+    "stablecoin": "stablecoin", "usdt": "usdt", "tether": "usdt",
+    "usdc": "usdc",
+    "coinbase": "coin", "coin": "coin",
+    "gold": "gold", "oil": "oil", "brent": "oil", "wti": "oil",
+    "nasdaq": "nasdaq", "nvidia": "nvda", "nvda": "nvda", "tesla": "tsla",
+    "apple": "aapl", "aapl": "aapl",
+}
+
+# Generic words ignored in the no-number fallback key.
+_STOPWORDS = {
+    "the", "and", "for", "with", "from", "this", "that", "after", "amid",
+    "into", "over", "says", "say", "could", "will", "have", "has", "are",
+    "was", "were", "what", "why", "how", "new", "now", "its", "his", "her",
+    "their", "more", "than", "but", "not", "you", "your", "all", "out",
+    "как", "что", "это", "для", "при", "над", "под", "его", "она", "они",
+}
+
+# Number tokens like $59K, 59,000, 1.2bn, 7,25% -> normalised canonical form.
+_NUM_RE = re.compile(
+    r"\$?\d[\d.,]*\s*(?:k|m|bn|b|t|млрд|млн|трлн|тыс|thousand|million|billion|trillion)?%?",
+    re.IGNORECASE,
+)
+_MULTIPLIERS = {
+    "k": 1_000, "тыс": 1_000, "thousand": 1_000,
+    "m": 1_000_000, "млн": 1_000_000, "million": 1_000_000,
+    "b": 1_000_000_000, "bn": 1_000_000_000, "млрд": 1_000_000_000,
+    "billion": 1_000_000_000,
+    "t": 1_000_000_000_000, "трлн": 1_000_000_000_000,
+    "trillion": 1_000_000_000_000,
+}
+_TICKER_RE = re.compile(r"\b[A-Z]{2,5}\b")
+
+
+def _normalise_number(token: str) -> Optional[str]:
+    is_pct = token.endswith("%")
+    t = token.rstrip("%").strip().lower().replace("$", "")
+    m = re.match(r"^([\d.,]+)\s*([a-zа-я]+)?$", t)
+    if not m:
+        return None
+    digits, suffix = m.group(1), m.group(2)
+    # Decide whether commas are thousands separators or a decimal comma.
+    if "," in digits and "." not in digits and re.search(r",\d{1,2}$", digits):
+        digits = digits.replace(",", ".")          # decimal comma (7,25)
+    else:
+        digits = digits.replace(",", "")           # thousands (59,000)
+    try:
+        value = float(digits)
+    except ValueError:
+        return None
+    if suffix in _MULTIPLIERS:
+        value *= _MULTIPLIERS[suffix]
+    if value == int(value):
+        value = int(value)
+    return f"{value}%" if is_pct else str(value)
+
+
+def story_tokens(title: str) -> List[str]:
+    """Extract the canonical story tokens used for cross-source dedup.
+
+    Combines normalised numbers (incl. $ amounts and % changes) and asset
+    tickers (coin names normalised to tickers). When the title has a numeric
+    anchor, that coarse set IS the key (so "BTC drops to $59K" and "Bitcoin
+    falls to $59,000" match). Without a number we add significant words so
+    unrelated headlines about the same asset do not over-collapse.
+    """
+    raw = title.strip()
+    nums = []
+    for m in _NUM_RE.findall(raw):
+        n = _normalise_number(m)
+        if n is not None:
+            nums.append(n)
+    tickers = {t.lower() for t in _TICKER_RE.findall(raw)}
+    words_lower = re.findall(r"[a-zA-Zа-яёА-ЯЁ]{3,}", raw.lower())
+    assets = {_COIN_ALIASES.get(w) for w in words_lower if w in _COIN_ALIASES}
+    assets |= {_COIN_ALIASES.get(t, t) for t in tickers}
+    assets = {a for a in assets if a}
+
+    base = set(nums) | assets
+    if nums:
+        tokens = base
+    else:
+        significant = {
+            w for w in words_lower if len(w) >= 4 and w not in _STOPWORDS
+        }
+        tokens = base | significant
+    return sorted(tokens)
+
+
+def story_key(title: str) -> str:
+    basis = " ".join(story_tokens(title))
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 
 
 @dataclass
@@ -34,18 +144,12 @@ class NewsItem:
 
     @property
     def dedup_key(self) -> str:
-        """Fuzzy key to detect the same story across different sources.
+        """Cross-source story key (see :func:`story_key`).
 
-        Normalises the title to lowercase alphanumeric tokens so that
-        "Bitcoin Hits $100K" and "bitcoin hits $100k!!!" collapse together.
+        "Bitcoin Hits $100K" and "bitcoin hits $100k!!!" collapse together,
+        as do "BTC drops to $59K" and "Bitcoin falls to $59,000".
         """
-        text = self.title.lower()
-        text = re.sub(r"[^a-z0-9а-яё ]+", " ", text)
-        tokens = [t for t in text.split() if len(t) > 2]
-        # Use the most significant tokens (sorted) to be order-insensitive.
-        significant = sorted(set(tokens))[:12]
-        basis = " ".join(significant)
-        return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+        return story_key(self.title)
 
 
 @dataclass

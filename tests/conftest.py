@@ -9,6 +9,9 @@ import pytest
 from src.models import NewsItem
 
 
+_UNSET = object()
+
+
 def make_item(
     title: str,
     *,
@@ -20,8 +23,12 @@ def make_item(
     official: bool = False,
     impact: int = 40,
     guid: Optional[str] = None,
-    published: Optional[datetime] = None,
+    published=_UNSET,
 ) -> NewsItem:
+    # Default to "now" so the 24h age filter keeps test items, but allow an
+    # explicit published=None (distinct from "not passed").
+    if published is _UNSET:
+        published = datetime.now(timezone.utc)
     return NewsItem(
         source_id=source_id,
         source_name=source_name,
@@ -32,7 +39,7 @@ def make_item(
         official=official,
         impact=impact,
         guid=guid,
-        published=published or datetime(2026, 6, 6, 12, 0, tzinfo=timezone.utc),
+        published=published,
     )
 
 

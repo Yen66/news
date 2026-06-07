@@ -33,7 +33,11 @@ services:
       - key: POLL_INTERVAL_SECONDS
         value: "30"
       - key: MAX_NEW_PER_CYCLE
-        value: "5"
+        value: "3"
+      - key: MAX_ARTICLE_AGE_HOURS
+        value: "24"
+      - key: STORY_DEDUP_WINDOW_HOURS
+        value: "6"
       - key: ENABLE_EDITOR
         value: "true"
       - key: DAILY_AI_CALL_BUDGET
