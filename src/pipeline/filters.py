@@ -30,19 +30,42 @@ CRYPTO_ALTCOINS = {
 }
 MARKET_TERMS = {
     "s&p", "s&p 500", "sp500", "nasdaq", "dow jones", "dow", "stock",
-    "stocks", "shares", "equity", "equities", "treasury", "yields",
-    "fed", "federal reserve", "fomc", "interest rate", "inflation", "cpi",
+    "stocks", "shares", "equity", "equities",
     "earnings", "ipo", "nvidia", "apple", "microsoft", "tesla", "amazon",
     "google", "alphabet", "meta", "wall street", "recession", "gdp",
 }
 
-ALL_KEYWORDS = CRYPTO_MAJORS | CRYPTO_ALTCOINS | MARKET_TERMS
+# Global macro / forex / rates / commodities / funds — for 24/7 coverage
+# beyond US equities.
+MACRO_TERMS = {
+    # central banks & policy
+    "central bank", "central banks", "federal reserve", "fed", "fomc",
+    "ecb", "boj", "bank of japan", "boe", "bank of england", "pboc",
+    "interest rate", "interest rates", "rate hike", "rate cut", "rate cuts",
+    "rate decision", "monetary policy", "quantitative", "inflation", "cpi",
+    "ppi", "jobs report", "payrolls", "unemployment",
+    # forex
+    "forex", "fx", "eur/usd", "usd/jpy", "gbp/usd", "dollar", "euro",
+    "yen", "yuan", "renminbi", "pound", "currency", "devaluation",
+    # commodities
+    "gold", "xau", "silver", "oil", "brent", "wti", "crude", "commodities",
+    # bonds / rates / credit
+    "bond", "bonds", "treasury", "treasuries", "yield", "yields",
+    "10-year", "credit", "default",
+    # funds / flows
+    "hedge fund", "hedge funds", "etf", "etfs", "etf flows", "etf inflows",
+    "etf outflows", "fund flows", "blackrock", "vanguard", "fidelity",
+    "grayscale", "institutional",
+}
+
+ALL_KEYWORDS = CRYPTO_MAJORS | CRYPTO_ALTCOINS | MARKET_TERMS | MACRO_TERMS
 
 # High-signal terms that raise an item's importance.
 HIGH_IMPACT_TERMS = {
-    "sec", "fed", "federal reserve", "fomc", "etf", "lawsuit", "ban",
-    "hack", "exploit", "halving", "rate cut", "rate hike", "approval",
-    "bankruptcy", "default", "all-time high", "crash", "plunge", "surge",
+    "sec", "fed", "federal reserve", "fomc", "ecb", "boj", "etf",
+    "lawsuit", "ban", "hack", "exploit", "halving", "rate cut",
+    "rate hike", "rate decision", "approval", "bankruptcy", "default",
+    "all-time high", "crash", "plunge", "surge", "interest rate",
 }
 
 # Advertising / low-value noise.
@@ -93,9 +116,30 @@ def _text_of(item: NewsItem) -> str:
     return f"{item.title} {item.summary}".lower()
 
 
+def _build_keyword_matcher(keywords):
+    """Word-boundary matcher for alphanumeric keywords (avoids matching
+    'ada' inside 'Canada' or 'oil' inside 'boil'); symbol-bearing keywords
+    like 's&p' or 'eur/usd' fall back to substring matching."""
+    words = sorted(
+        (k for k in keywords if re.fullmatch(r"[a-z0-9 -]+", k)),
+        key=len,
+        reverse=True,
+    )
+    symbols = [k for k in keywords if not re.fullmatch(r"[a-z0-9 -]+", k)]
+    pattern = re.compile(
+        r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in words) + r")(?![a-z0-9])"
+    )
+    return pattern, symbols
+
+
+_KEYWORD_RE, _KEYWORD_SYMBOLS = _build_keyword_matcher(ALL_KEYWORDS)
+
+
 def matches_keywords(item: NewsItem) -> bool:
     text = _text_of(item)
-    return any(kw in text for kw in ALL_KEYWORDS)
+    if _KEYWORD_RE.search(text):
+        return True
+    return any(sym in text for sym in _KEYWORD_SYMBOLS)
 
 
 def is_ad(item: NewsItem) -> bool:
@@ -121,15 +165,20 @@ def has_influential_author(item: NewsItem) -> bool:
     return any(name in text for name in INFLUENTIAL_AUTHORS)
 
 
+_HIGH_IMPACT_RE = re.compile(
+    r"(?<![a-z0-9])(?:"
+    + "|".join(re.escape(t) for t in sorted(HIGH_IMPACT_TERMS, key=len, reverse=True))
+    + r")(?![a-z0-9])"
+)
+
+
 def score_impact(item: NewsItem) -> int:
     """Return an updated impact score (does not mutate the item)."""
     text = _text_of(item)
     score = item.impact
     if item.official:
         score += 25
-    for term in HIGH_IMPACT_TERMS:
-        if term in text:
-            score += 10
+    score += 10 * len(set(_HIGH_IMPACT_RE.findall(text)))
     return max(0, min(100, score))
 
 

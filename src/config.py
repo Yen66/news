@@ -121,6 +121,7 @@ class Config:
     database_url: str
     poll_interval_seconds: int
     queue_max_size: int
+    max_new_per_cycle: int
     enable_editor: bool
     daily_ai_call_budget: int
     request_timeout_seconds: int
@@ -216,6 +217,7 @@ def load_config() -> Config:
         database_url=_get("DATABASE_URL"),
         poll_interval_seconds=_get_int("POLL_INTERVAL_SECONDS", 30),
         queue_max_size=_get_int("QUEUE_MAX_SIZE", 200),
+        max_new_per_cycle=_get_int("MAX_NEW_PER_CYCLE", 5),
         enable_editor=_get_bool("ENABLE_EDITOR", True),
         daily_ai_call_budget=_get_int("DAILY_AI_CALL_BUDGET", 1000),
         request_timeout_seconds=_get_int("REQUEST_TIMEOUT_SECONDS", 30),

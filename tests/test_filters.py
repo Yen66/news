@@ -45,6 +45,34 @@ def test_should_publish_master_gate():
     assert not filters.should_publish(junk)
 
 
+def test_macro_keywords_match():
+    for title in [
+        "ECB holds interest rates steady",
+        "Gold hits record as dollar weakens",
+        "Oil prices surge on supply fears",
+        "US Treasury yields climb to 5%",
+        "Hedge funds boost bets on the yen",
+        "Bitcoin ETF flows turn positive",
+        "Forex markets brace for Fed decision",
+    ]:
+        assert filters.matches_keywords(make_item(title)), title
+
+
+def test_word_boundary_avoids_false_positives():
+    # 'ada' inside 'Canada', 'oil' inside 'boiling', 'ton' inside 'Washington'
+    assert not filters.matches_keywords(make_item("Canada boiling over Washington"))
+    # but a real standalone ticker still matches
+    assert filters.matches_keywords(make_item("ADA gains 5% today"))
+
+
+def test_score_impact_ban_does_not_match_bank():
+    bank = make_item("Major bank reports earnings", impact=40)
+    # 'bank' must not trigger the 'ban' high-impact term.
+    assert filters.score_impact(bank) == 40
+    real_ban = make_item("Country announces crypto ban", impact=40)
+    assert filters.score_impact(real_ban) > 40
+
+
 def test_impact_scoring_boosts_high_signal():
     base = make_item("SEC approves spot bitcoin ETF", official=True, impact=85)
     scored = filters.score_impact(base)

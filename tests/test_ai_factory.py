@@ -11,6 +11,7 @@ def _config(providers):
         database_url="",
         poll_interval_seconds=30,
         queue_max_size=10,
+        max_new_per_cycle=5,
         enable_editor=True,
         daily_ai_call_budget=100,
         request_timeout_seconds=10,

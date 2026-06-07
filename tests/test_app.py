@@ -38,6 +38,33 @@ async def test_poll_once_queues_new_items(monkeypatch):
     assert app._queue.size == 2
 
 
+async def test_poll_once_caps_new_per_cycle(monkeypatch):
+    monkeypatch.setenv("MAX_NEW_PER_CYCLE", "3")
+    app = _app(monkeypatch)
+    assert app._config.max_new_per_cycle == 3
+    titles = [
+        "Bitcoin rallies sharply",
+        "Ethereum upgrade goes live",
+        "Solana network outage hits trading",
+        "Nasdaq closes at record",
+        "Gold jumps as dollar slides",
+        "Oil prices spike overnight",
+        "SEC files new enforcement action",
+        "ECB signals rate decision",
+    ]
+    items = [
+        make_item(t, guid=f"g{i}", impact=50 + i) for i, t in enumerate(titles)
+    ]
+
+    async def fake_fetch_all(_sources):
+        return items
+
+    monkeypatch.setattr(app._fetcher, "fetch_all", fake_fetch_all)
+    await app._poll_once()
+    # Only the cap is queued this cycle, even though 8 are new.
+    assert app._queue.size == 3
+
+
 async def test_poll_once_dedups_across_cycles(monkeypatch):
     app = _app(monkeypatch)
     item = make_item("Bitcoin rallies above 70k", guid="g1")

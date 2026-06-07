@@ -32,6 +32,8 @@ services:
       # --- Non-secret tunables --------------------------------------------
       - key: POLL_INTERVAL_SECONDS
         value: "30"
+      - key: MAX_NEW_PER_CYCLE
+        value: "5"
       - key: ENABLE_EDITOR
         value: "true"
       - key: DAILY_AI_CALL_BUDGET

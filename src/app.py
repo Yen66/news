@@ -219,18 +219,24 @@ class NewsBotApp:
         fresh = self._dedup.filter_new(kept)     # exact + fuzzy dedup
         # Sort by impact so high-impact items enter the queue first.
         fresh.sort(key=lambda i: i.impact, reverse=True)
+        # Cap how many we queue per cycle to avoid flooding the channel when a
+        # burst of items arrives at once; highest-impact ones go first, the
+        # rest are caught on subsequent cycles (they stay "new" until posted).
+        cap = self._config.max_new_per_cycle
+        selected = fresh[:cap] if cap > 0 else fresh
         queued = 0
-        for item in fresh:
+        for item in selected:
             if await self._queue.put(item):
                 queued += 1
         # Log EVERY cycle so the poller's liveness is always visible.
         log.info(
-            "Poll #%d: fetched=%d kept=%d new=%d queued=%d per_source=%s",
+            "Poll #%d: fetched=%d kept=%d new=%d queued=%d (cap=%d) per_source=%s",
             cycle,
             len(raw),
             len(kept),
             len(fresh),
             queued,
+            cap,
             dict(by_source),
         )
         if not raw:
