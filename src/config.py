@@ -25,11 +25,50 @@ def _get(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
 
 
+def _get_any(names: list[str], default: str = "") -> str:
+    """Return the first non-empty env var among ``names``.
+
+    Lets us accept short names (BOT_TOKEN, CHANNEL_ID, ADMIN_ID) while keeping
+    the older TELEGRAM_*-prefixed names working as fallbacks.
+    """
+    for name in names:
+        val = os.environ.get(name, "").strip()
+        if val:
+            return val
+    return default
+
+
 def _get_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+def normalize_channel_id(raw: str) -> str:
+    """Normalise a Telegram channel id to a form the Bot API accepts.
+
+    - Numeric ids (``-100123...``) are passed through unchanged.
+    - A bare public username like ``CMW_News`` gets a leading ``@``.
+    - A full URL like ``https://t.me/CMW_News`` or ``t.me/CMW_News`` is
+      reduced to ``@CMW_News``.
+    - An already-correct ``@CMW_News`` is left as-is.
+    """
+    value = raw.strip()
+    if not value:
+        return ""
+    # Numeric chat id (possibly negative) — leave untouched.
+    if value.lstrip("-").isdigit():
+        return value
+    # Strip a t.me URL down to the username.
+    for prefix in ("https://t.me/", "http://t.me/", "t.me/"):
+        if value.lower().startswith(prefix):
+            value = value[len(prefix):]
+            break
+    value = value.lstrip("/")
+    if value.startswith("@"):
+        return value
+    return "@" + value
 
 
 def _get_int(name: str, default: int) -> int:
@@ -162,9 +201,13 @@ def _build_providers() -> List[ProviderConfig]:
 def load_config() -> Config:
     """Load configuration from the environment."""
     telegram = TelegramConfig(
-        bot_token=_get("TELEGRAM_BOT_TOKEN"),
-        channel_id=_get("TELEGRAM_CHANNEL_ID"),
-        admin_id=_get("ADMIN_TELEGRAM_ID"),
+        # Primary names: BOT_TOKEN / CHANNEL_ID. The TELEGRAM_*-prefixed names
+        # are accepted as fallbacks for backwards compatibility.
+        bot_token=_get_any(["BOT_TOKEN", "TELEGRAM_BOT_TOKEN"]),
+        channel_id=normalize_channel_id(
+            _get_any(["CHANNEL_ID", "TELEGRAM_CHANNEL_ID"])
+        ),
+        admin_id=_get_any(["ADMIN_ID", "ADMIN_TELEGRAM_ID"]),
         language=_get("CHANNEL_LANGUAGE", "ru"),
     )
     return Config(

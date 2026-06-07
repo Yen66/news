@@ -26,8 +26,8 @@ async def _amain() -> None:
 
     if not config.telegram.configured:
         log.warning(
-            "Telegram is not fully configured (TELEGRAM_BOT_TOKEN / "
-            "TELEGRAM_CHANNEL_ID). The bot will run but cannot publish."
+            "Telegram is not fully configured (BOT_TOKEN / CHANNEL_ID). "
+            "The bot will run but cannot publish."
         )
     if not config.usable_providers:
         log.warning(

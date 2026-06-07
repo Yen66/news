@@ -12,11 +12,11 @@ services:
     autoDeploy: true
     envVars:
       # --- Secrets: set these in the Render dashboard (never commit) -------
-      - key: TELEGRAM_BOT_TOKEN
+      - key: BOT_TOKEN
         sync: false
-      - key: TELEGRAM_CHANNEL_ID
+      - key: CHANNEL_ID
         sync: false
-      - key: ADMIN_TELEGRAM_ID
+      - key: ADMIN_ID
         sync: false
       - key: DATABASE_URL
         sync: false

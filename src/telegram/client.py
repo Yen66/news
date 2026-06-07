@@ -67,10 +67,22 @@ class TelegramClient:
                         log.warning("Telegram 429, retrying in %ss", retry_after)
                         await asyncio.sleep(retry_after)
                         continue
+                    hint = ""
+                    if resp.status in (401, 404):
+                        hint = (
+                            " (check BOT_TOKEN — a 404/401 here usually means "
+                            "the token is empty or wrong)"
+                        )
+                    elif resp.status == 400 and "chat not found" in body.lower():
+                        hint = (
+                            " (check CHANNEL_ID, e.g. @CMW_News, and that the "
+                            "bot is an admin of that channel)"
+                        )
                     log.error(
-                        "Telegram sendMessage failed (%s): %s",
+                        "Telegram sendMessage failed (%s): %s%s",
                         resp.status,
                         body,
+                        hint,
                     )
                     return False
             except Exception as exc:  # noqa: BLE001 - network resilience
@@ -85,6 +97,6 @@ class TelegramClient:
     async def alert_admin(self, text: str) -> bool:
         """Send an operational alert to the admin (errors, lifecycle)."""
         if not self._admin_id:
-            log.warning("No ADMIN_TELEGRAM_ID set; alert dropped: %s", text)
+            log.warning("No ADMIN_ID set; alert dropped: %s", text)
             return False
         return await self._send(self._admin_id, f"[NewsBot] {text}")

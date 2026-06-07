@@ -160,13 +160,14 @@ secret has a matching, commented entry in `.env.example`.
 
 - [ ] **Create the Telegram channel** you want to publish to.
 - [ ] **Create a bot** with [@BotFather](https://t.me/BotFather) → copy the
-      token into **`TELEGRAM_BOT_TOKEN`**. Then add the bot to your channel as
-      an **administrator** (with "Post messages" permission).
-- [ ] **Set the channel** in **`TELEGRAM_CHANNEL_ID`**: `@your_channel` for a
-      public channel, or the numeric `-100…` id for a private one.
+      token into **`BOT_TOKEN`**. Then add the bot to your channel as an
+      **administrator** (with "Post messages" permission).
+- [ ] **Set the channel** in **`CHANNEL_ID`**: `@your_channel` for a public
+      channel (e.g. `@CMW_News`), or the numeric `-100…` id for a private one.
+      A bare username or a `t.me/<name>` URL also works (normalised in code).
 - [ ] **Get your own Telegram numeric id** from
-      [@userinfobot](https://t.me/userinfobot) → paste into
-      **`ADMIN_TELEGRAM_ID`** (this is where error alerts go).
+      [@userinfobot](https://t.me/userinfobot) → paste into **`ADMIN_ID`**
+      (this is where error alerts go).
 - [ ] **Groq key**: sign up at <https://console.groq.com/keys> → create an API
       key → **`GROQ_API_KEY`**. (Primary provider — the bot works with just
       this one.)
