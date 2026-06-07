@@ -99,7 +99,16 @@ class Processor:
         # Account for the AI call(s): 1 writer + maybe 1 editor.
         self._budget.record(2 if post.editor_used else 1)
 
-        await self._telegram.publish(post.body)
+        sent = await self._telegram.publish(post.body)
+        if not sent:
+            # Do NOT mark as seen/sent on failure, so the item is retried on a
+            # later cycle instead of being silently lost forever.
+            log.error(
+                "Telegram publish failed for %s — leaving item unseen for "
+                "retry.",
+                item.title,
+            )
+            return False
 
         # Persist for dedup + archive only after a successful publish.
         self._dedup.mark(item)

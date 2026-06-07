@@ -22,11 +22,11 @@ from .ai.writer import PostWriter
 from .config import Config
 from .db.repository import build_repository
 from .pipeline.dedup import Deduplicator
-from .pipeline.filters import filter_items
+from .pipeline.filters import filter_items, score_impact, should_publish
 from .pipeline.processor import Processor, ProcessingQueue
 from .pipeline.throttle import DailyBudget
 from .server import build_app
-from .sources.catalog import active_sources
+from .sources.catalog import Source, active_sources
 from .sources.feeds import FeedFetcher
 from .telegram.client import TelegramClient
 
@@ -77,6 +77,59 @@ class NewsBotApp:
             "ai_budget_remaining": self._budget.remaining,
             "providers": self._ai.provider_names,
             "sources": [s.id for s in self._sources],
+        }
+
+    # --- diagnostics --------------------------------------------------------
+    async def test_post(self) -> dict:
+        """End-to-end pipeline check, triggered by GET /test-post.
+
+        Fetches one fresh CoinDesk article, BYPASSES the seen-check, writes it
+        with the AI and posts it to Telegram, then returns a result summary.
+        Does NOT mark the item as seen (so it won't interfere with normal
+        dedup). Useful to confirm the AI + Telegram pipeline works end to end.
+        """
+        coindesk = next(
+            (s for s in self._sources if s.id == "coindesk"),
+            Source(
+                id="coindesk",
+                name="CoinDesk",
+                kind="rss",
+                url="https://www.coindesk.com/arc/outboundfeeds/rss/",
+                category="crypto",
+                base_impact=55,
+            ),
+        )
+        items = await self._fetcher.fetch_source(coindesk)
+        if not items:
+            return {"published": False, "error": "no items fetched from CoinDesk"}
+
+        # Prefer an item that passes the normal filters; otherwise just take
+        # the first so the pipeline is still exercised.
+        item = next((i for i in items if should_publish(i)), items[0])
+        item.impact = score_impact(item)
+
+        try:
+            post = await self._writer.write(item)
+        except Exception as exc:  # noqa: BLE001 - report to caller
+            return {
+                "published": False,
+                "stage": "ai_write",
+                "title": item.title,
+                "link": item.link,
+                "error": repr(exc),
+            }
+
+        sent = await self._telegram.publish(post.body)
+        return {
+            "published": bool(sent),
+            "stage": "telegram_publish" if not sent else "done",
+            "title": item.title,
+            "link": item.link,
+            "provider_used": post.provider_used,
+            "editor_used": post.editor_used,
+            "official": post.official,
+            "impact": item.impact,
+            "body_preview": post.body[:400],
         }
 
     # --- lifecycle ----------------------------------------------------------
@@ -153,6 +206,15 @@ class NewsBotApp:
         cycle = self._poll_count
         raw = await self._fetcher.fetch_all(self._sources)
         by_source = Counter(i.source_id for i in raw)
+        # Log the first few article links per source so we can verify the feed
+        # content is actually changing between cycles (vs. a stale/cached copy).
+        samples: dict[str, list[str]] = {}
+        for item in raw:
+            bucket = samples.setdefault(item.source_id, [])
+            if len(bucket) < 3:
+                bucket.append(item.link or item.guid or item.title[:60])
+        for src_id, links in samples.items():
+            log.info("Poll #%d sample %s: %s", cycle, src_id, links)
         kept = filter_items(raw)                 # keyword + ads + opinion gate
         fresh = self._dedup.filter_new(kept)     # exact + fuzzy dedup
         # Sort by impact so high-impact items enter the queue first.
@@ -235,7 +297,7 @@ class NewsBotApp:
         log.info("Background tasks created: %s",
                  [t.get_name() for t in self._tasks])
 
-        app = build_app(self.status)
+        app = build_app(self.status, test_post=self.test_post)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host="0.0.0.0", port=self._config.http_port)

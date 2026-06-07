@@ -152,6 +152,23 @@ docker run --env-file .env -p 10000:10000 news-bot
 
 ---
 
+## Diagnostics
+
+- **`GET /test-post`** — fetches one fresh CoinDesk article, **bypasses** the
+  seen-check, runs it through the full pipeline (AI write + Telegram post) and
+  returns a JSON summary (`published`, `provider_used`, `body_preview`, …). Use
+  it to confirm the AI + Telegram path works end to end:
+  `curl https://<your-service>.onrender.com/test-post`
+- Each poll logs `Poll #N: fetched/kept/new/queued` plus a sample of the first
+  few article links per source, so you can see whether feed content is actually
+  changing between cycles. Watch the **`new=`** count (not the per-source
+  totals — feeds return a fixed-size window, so those stay constant).
+- Items are marked "seen" **only after a successful Telegram publish**. If a
+  publish fails, the item is left unseen and retried on a later cycle. (If your
+  Postgres `sent_news` table contains rows from a period when posting was
+  failing, those articles are recorded as sent but were never published; clear
+  them with `TRUNCATE sent_news;` if you want them re-posted.)
+
 # WHAT YOU MUST DO
 
 Everything above is built and tested. To go live you only need to create a few

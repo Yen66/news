@@ -53,6 +53,23 @@ async def test_exhausted_budget_still_posts_official():
     assert len(telegram.published) == 1
 
 
+class _FailingTelegram(FakeTelegram):
+    async def publish(self, text: str) -> bool:
+        self.published.append(text)  # record the attempt
+        return False  # but report failure
+
+
+async def test_failed_publish_is_not_marked_seen():
+    telegram = _FailingTelegram()
+    proc, _, repo, dedup, budget = _build(telegram=telegram)
+    item = make_item("Bitcoin rallies above 70k")
+    published = await proc.process_one(item)
+    assert published is False
+    # Must NOT be marked seen, and must NOT be archived, so it retries later.
+    assert not dedup.is_duplicate(item)
+    assert repo.archived == []
+
+
 async def test_queue_priority_orders_by_impact():
     q = ProcessingQueue(max_size=10)
     await q.put(make_item("low", impact=10, guid="l"))

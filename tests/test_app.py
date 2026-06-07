@@ -56,6 +56,54 @@ async def test_poll_once_dedups_across_cycles(monkeypatch):
     assert app._queue.size == 1  # no new item queued the second time
 
 
+async def test_test_post_runs_pipeline_and_bypasses_seen(monkeypatch):
+    app = _app(monkeypatch)
+    item = make_item("CoinDesk: Bitcoin ETF inflows surge", source_id="coindesk")
+
+    async def fake_fetch_source(_source):
+        return [item]
+
+    monkeypatch.setattr(app._fetcher, "fetch_source", fake_fetch_source)
+
+    # Stub the writer + telegram so no real network/AI is needed.
+    class _Post:
+        body = "Тестовый пост"
+        provider_used = "groq"
+        editor_used = False
+        official = False
+
+    async def fake_write(_item):
+        return _Post()
+
+    published_holder = {}
+
+    async def fake_publish(text):
+        published_holder["text"] = text
+        return True
+
+    monkeypatch.setattr(app._writer, "write", fake_write)
+    monkeypatch.setattr(app._telegram, "publish", fake_publish)
+
+    result = await app.test_post()
+    assert result["published"] is True
+    assert result["title"] == item.title
+    assert published_holder["text"] == "Тестовый пост"
+    # Must NOT mark the item as seen.
+    assert not app._dedup.is_duplicate(item)
+
+
+async def test_test_post_reports_no_items(monkeypatch):
+    app = _app(monkeypatch)
+
+    async def fake_fetch_source(_source):
+        return []
+
+    monkeypatch.setattr(app._fetcher, "fetch_source", fake_fetch_source)
+    result = await app.test_post()
+    assert result["published"] is False
+    assert "error" in result
+
+
 async def test_poll_once_handles_empty_fetch(monkeypatch):
     app = _app(monkeypatch)
 
