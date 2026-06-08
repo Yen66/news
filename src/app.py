@@ -215,25 +215,61 @@ class NewsBotApp:
     def _filter_by_age(self, items: list) -> list:
         """Keep only articles published within MAX_ARTICLE_AGE_HOURS.
 
-        Missing pubDate => treated as potentially old and skipped. Skipped
-        items are marked seen (in-memory) so they are not re-evaluated every
-        cycle. Nothing is persisted, so they never pollute the archive.
+        Anything without a valid, timezone-aware UTC publication date is
+        rejected outright — we never guess the timezone of a naive datetime
+        and we never use ``updated`` as a substitute for ``published``.
+        Skipped items are marked seen (in-memory) so they are not
+        re-evaluated every cycle. Nothing is persisted.
         """
         from datetime import timedelta
 
-        max_age = timedelta(hours=self._config.max_article_age_hours)
+        max_hours = self._config.max_article_age_hours
+        max_age = timedelta(hours=max_hours)
         now = datetime.now(timezone.utc)
         recent = []
         for item in items:
             pub = item.published
             if pub is None:
+                log.info(
+                    "age-filter REJECT (no-pubdate) source=%s title=%r",
+                    item.source_id, item.title[:80],
+                )
                 self._dedup.mark(item)
                 continue
             if pub.tzinfo is None:
-                pub = pub.replace(tzinfo=timezone.utc)
-            if now - pub > max_age:
+                # Naive timestamps are ambiguous — reject rather than assume.
+                # All correct feed paths produce aware UTC datetimes.
+                log.warning(
+                    "age-filter REJECT (naive-tz) source=%s title=%r pub=%s",
+                    item.source_id, item.title[:80], pub.isoformat(),
+                )
                 self._dedup.mark(item)
                 continue
+            pub_utc = pub.astimezone(timezone.utc)
+            age_h = (now - pub_utc).total_seconds() / 3600.0
+            if age_h > max_hours:
+                log.info(
+                    "age-filter REJECT (too-old) source=%s title=%r "
+                    "pub=%s now=%s age_h=%.2f limit_h=%d",
+                    item.source_id, item.title[:80],
+                    pub_utc.isoformat(), now.isoformat(), age_h, max_hours,
+                )
+                self._dedup.mark(item)
+                continue
+            if age_h < 0:
+                # Future-dated entries are bogus (parser bug or upstream typo).
+                log.warning(
+                    "age-filter REJECT (future-dated) source=%s title=%r "
+                    "pub=%s now=%s",
+                    item.source_id, item.title[:80],
+                    pub_utc.isoformat(), now.isoformat(),
+                )
+                self._dedup.mark(item)
+                continue
+            log.debug(
+                "age-filter ACCEPT source=%s title=%r pub=%s age_h=%.2f",
+                item.source_id, item.title[:80], pub_utc.isoformat(), age_h,
+            )
             recent.append(item)
         return recent
 

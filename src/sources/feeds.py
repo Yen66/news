@@ -8,11 +8,11 @@ run in a thread executor so the event loop is never blocked.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import logging
 import random
 import time
 from datetime import datetime, timezone
-from time import mktime
 from typing import List, Optional
 
 import aiohttp
@@ -28,10 +28,18 @@ _USER_AGENT = (
 
 
 def _struct_to_dt(struct_time) -> Optional[datetime]:
+    """Convert a feedparser ``*_parsed`` struct_time to an aware UTC datetime.
+
+    feedparser already converts publication times to UTC, so the inverse is
+    :func:`calendar.timegm` (treats the struct as UTC) — NOT :func:`time.mktime`,
+    which would treat it as local time and shift everything by the host's TZ
+    offset, letting stale articles slip past the age filter on non-UTC hosts.
+    """
     if not struct_time:
         return None
     try:
-        return datetime.fromtimestamp(mktime(struct_time), tz=timezone.utc)
+        return datetime.fromtimestamp(calendar.timegm(struct_time),
+                                      tz=timezone.utc)
     except Exception:  # pragma: no cover - defensive
         return None
 
@@ -47,9 +55,14 @@ def _parse_rss(text: str, source: Source) -> List[NewsItem]:
         if not title or not link:
             continue
         summary = (entry.get("summary") or entry.get("description") or "").strip()
-        published = _struct_to_dt(
-            entry.get("published_parsed") or entry.get("updated_parsed")
-        )
+        # ONLY trust ``published_parsed`` (the article's original publication
+        # date). ``updated_parsed`` reflects the last time the publisher
+        # touched the entry — a re-tag, correction or republish-for-engagement
+        # makes it "today" even when the actual story is weeks old, which is
+        # exactly how stale content used to slip past the 24h age gate.
+        # If the original publication date is missing, leave ``published``
+        # unset; the age filter will reject the item.
+        published = _struct_to_dt(entry.get("published_parsed"))
         guid = entry.get("id") or entry.get("guid") or link
         items.append(
             NewsItem(
