@@ -57,6 +57,27 @@ TIER1_TERMS = {
     "google", "tesla", "magnificent seven", "magnificent 7",
 }
 
+# Geopolitical / sovereign events that move markets. Treated as tier-1 — these
+# are catalysts in their own right (tariff shock, war, OPEC quota, sovereign
+# default, US-China trade rupture) and must clear the gate the same way a
+# Fed decision does.
+GEOPOLITICAL_TERMS = {
+    "tariff", "tariffs", "trade war", "trade deal",
+    "sanctions", "sanctioned", "embargo", "export controls", "export ban",
+    "opec", "opec+",
+    "sovereign default", "debt default", "credit rating",
+    "downgrade us debt", "us downgrade",
+    "government shutdown", "debt ceiling",
+    "election", "elections", "presidential election",
+    "war", "ceasefire", "invasion", "military strike", "missile strike",
+    "taiwan", "middle east", "strait of hormuz", "red sea",
+    "russia ukraine", "ukraine war", "israel iran", "iran israel",
+    "north korea",
+}
+
+# Geopolitical events are first-class tier-1 catalysts.
+TIER1_TERMS |= GEOPOLITICAL_TERMS
+
 # TIER 2 — MEDIUM priority. Relevant, but a hit alone is a weaker signal.
 TIER2_TERMS = {
     # --- large-cap US equities beyond the Mag 7 ---
@@ -418,6 +439,17 @@ def filter_items(
         if not should_publish(item):
             continue
         item.impact = score_impact(item)
+        # Tier-2-only catalyst gate: an item whose only relevance is a
+        # tier-2 keyword (large-cap equity / commodity / alt-coin / FX)
+        # with NO catalyst, NO tier-1 anchor and from no official source
+        # is filler ("Gold steady ahead of data", "Visa explores deal").
+        # Reject regardless of numeric score.
+        if not item.official:
+            text = _text_of(item)
+            tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
+            catalysts = _count_distinct(text, _CATALYST_RE, _CATALYST_SYM)
+            if tier1 == 0 and catalysts == 0:
+                continue
         if item.impact < min_impact and not item.official:
             continue
         kept.append(item)
