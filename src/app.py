@@ -305,7 +305,14 @@ class NewsBotApp:
             else:
                 non_historical.append(item)
 
-        kept = filter_items(non_historical)      # keyword + ads + opinion gate
+        # Relevance + impact gate. Items below MIN_IMPACT_TO_PUBLISH (regional
+        # noise, generic commentary, catalyst-free move recaps) are rejected
+        # here, so only trader-relevant signal reaches the channel.
+        relevant = len([i for i in non_historical if should_publish(i)])
+        kept = filter_items(
+            non_historical, self._config.min_impact_to_publish
+        )
+        low_impact_skipped = relevant - len(kept)
         fresh = self._dedup.filter_new(kept)     # exact (same-article) dedup
         # Highest-impact first so they win both the per-cycle cap and any
         # cross-source story collision.
@@ -327,17 +334,19 @@ class NewsBotApp:
 
         # Log EVERY cycle so the poller's liveness is always visible.
         log.info(
-            "Poll #%d: fetched=%d old=%d historical=%d kept=%d new=%d "
-            "story_dup=%d queued=%d (cap=%d) per_source=%s",
+            "Poll #%d: fetched=%d old=%d historical=%d low_impact=%d kept=%d "
+            "new=%d story_dup=%d queued=%d (cap=%d min_impact=%d) per_source=%s",
             cycle,
             len(raw),
             age_skipped,
             historical_skipped,
+            low_impact_skipped,
             len(kept),
             len(fresh),
             story_skipped,
             queued,
             cap,
+            self._config.min_impact_to_publish,
             dict(by_source),
         )
         if not raw:

@@ -131,6 +131,7 @@ class Config:
     http_port: int
     log_level: str
     dry_run: bool
+    min_impact_to_publish: int = 45
 
     @property
     def usable_providers(self) -> List[ProviderConfig]:
@@ -234,4 +235,5 @@ def load_config() -> Config:
         http_port=_get_int("PORT", 10000),
         log_level=_get("LOG_LEVEL", "INFO"),
         dry_run=_get_bool("DRY_RUN", False),
+        min_impact_to_publish=_get_int("MIN_IMPACT_TO_PUBLISH", 45),
     )

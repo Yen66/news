@@ -111,10 +111,12 @@ def test_word_boundary_avoids_false_positives():
 
 def test_score_impact_ban_does_not_match_bank():
     bank = make_item("Major bank reports earnings", impact=40)
-    # 'bank' must not trigger the 'ban' high-impact term.
-    assert filters.score_impact(bank) == 40
     real_ban = make_item("Country announces crypto ban", impact=40)
-    assert filters.score_impact(real_ban) > 40
+    # 'bank' must NOT trigger the 'ban' catalyst term; a real ban (plus the
+    # 'announces' catalyst and the crypto tier-1 hit) must score higher.
+    assert filters.score_impact(real_ban) > filters.score_impact(bank)
+    # And 'bank' alone (no catalyst) stays modest.
+    assert filters.score_impact(bank) < 70
 
 
 def test_impact_scoring_boosts_high_signal():

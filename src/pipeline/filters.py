@@ -1,12 +1,24 @@
-"""Mechanical junk filtering — plain code, no AI.
+"""Mechanical relevance + impact filtering — plain code, no AI.
 
-Decides whether a NewsItem is worth sending to the (expensive) AI step:
-- it must match the crypto/markets keyword filter;
-- obvious ads and empty "price horoscope" posts are dropped;
-- influential-opinion gating for opinion/forecast pieces.
+Two jobs:
 
-It also bumps an item's ``impact`` score for high-signal keywords so the
-queue can prioritise official / high-impact news when near AI limits.
+1. **Relevance gate** (`should_publish`): is this item even in our universe —
+   crypto, central banks, key macro releases, ETF/regulation, US mega-caps and
+   major indices? Obvious ads, price horoscopes, pure unsourced opinion and
+   retrospectives are dropped here.
+
+2. **Impact scoring** (`score_impact`): a 0-100 signal score used both to
+   prioritise the queue AND — via ``filter_items`` and ``DEFAULT_MIN_IMPACT`` —
+   to REJECT low-value noise (small regional indexes, generic analyst
+   commentary, articles that merely restate a percentage move with no
+   catalyst). Quality over quantity: if it doesn't clear the bar, it never
+   reaches the channel.
+
+The channel is for crypto + macro traders, not general market-news
+aggregation, so the scoring is deliberately opinionated: it BOOSTS macro
+releases, central-bank actions, ETF flows, crypto regulation and major
+US-market events, and PENALISES obscure markets, opinion pieces and
+catalyst-free move summaries.
 """
 from __future__ import annotations
 
@@ -16,58 +28,122 @@ from typing import Iterable
 
 from ..models import NewsItem
 
-# --- Keyword vocabularies -------------------------------------------------
-CRYPTO_MAJORS = {
+# === Relevance vocabularies ===============================================
+# TIER 1 — HIGH priority. The core of the channel. A single tier-1 hit is a
+# strong signal and earns a large boost.
+TIER1_TERMS = {
+    # --- crypto majors & core infra ---
     "bitcoin", "btc", "ethereum", "eth", "ether", "solana", "sol",
-    "xrp", "ripple", "bnb", "dogecoin", "doge", "cardano", "ada",
-    "stablecoin", "usdt", "usdc", "tether",
-}
-CRYPTO_ALTCOINS = {
-    "altcoin", "avalanche", "avax", "polkadot", "dot", "chainlink", "link",
-    "polygon", "matic", "litecoin", "ltc", "tron", "trx", "shiba", "shib",
-    "toncoin", "ton", "aptos", "sui", "arbitrum", "optimism", "near",
-    "defi", "nft", "etf", "sec", "blockchain", "crypto", "cryptocurrency",
-    "binance", "coinbase", "kraken", "mining", "halving",
-}
-MARKET_TERMS = {
-    "s&p", "s&p 500", "sp500", "nasdaq", "dow jones", "dow", "stock",
-    "stocks", "shares", "equity", "equities",
-    "earnings", "ipo", "nvidia", "apple", "microsoft", "tesla", "amazon",
-    "google", "alphabet", "meta", "wall street", "recession", "gdp",
-}
-
-# Global macro / forex / rates / commodities / funds — for 24/7 coverage
-# beyond US equities.
-MACRO_TERMS = {
-    # central banks & policy
-    "central bank", "central banks", "federal reserve", "fed", "fomc",
-    "ecb", "boj", "bank of japan", "boe", "bank of england", "pboc",
-    "interest rate", "interest rates", "rate hike", "rate cut", "rate cuts",
-    "rate decision", "monetary policy", "quantitative", "inflation", "cpi",
-    "ppi", "jobs report", "payrolls", "unemployment",
-    # forex
-    "forex", "fx", "eur/usd", "usd/jpy", "gbp/usd", "dollar", "euro",
-    "yen", "yuan", "renminbi", "pound", "currency", "devaluation",
-    # commodities
-    "gold", "xau", "silver", "oil", "brent", "wti", "crude", "commodities",
-    # bonds / rates / credit
-    "bond", "bonds", "treasury", "treasuries", "yield", "yields",
-    "10-year", "credit", "default",
-    # funds / flows
-    "hedge fund", "hedge funds", "etf", "etfs", "etf flows", "etf inflows",
-    "etf outflows", "fund flows", "blackrock", "vanguard", "fidelity",
-    "grayscale", "institutional",
+    "xrp", "ripple", "bnb", "stablecoin", "usdt", "usdc", "tether",
+    # --- ETF / regulation / key institutions ---
+    "spot etf", "etf flows", "etf inflows", "etf outflows", "etf approval",
+    "etf approvals", "etf rejection", "etf rejections", "sec", "cftc",
+    "blackrock", "coinbase", "microstrategy", "strategy inc", "binance",
+    "grayscale", "crypto regulation", "stablecoin bill", "stablecoin law",
+    "genius act", "mica",
+    # --- central banks & policymakers ---
+    "federal reserve", "the fed", "fomc", "ecb", "boj", "bank of japan",
+    "pboc", "people's bank of china", "bank of england", "boe", "powell",
+    "lagarde", "ueda",
+    # --- macro releases & rates ---
+    "cpi", "core cpi", "ppi", "pce", "nfp", "nonfarm", "non-farm",
+    "payrolls", "jobs report", "unemployment", "inflation", "interest rate",
+    "interest rates", "rate hike", "rate cut", "rate cuts", "rate decision",
+    "rate hold", "monetary policy", "treasury yield", "treasury yields",
+    "10-year", "2-year", "dxy", "dollar index",
+    # --- US mega-caps, major indices, Magnificent 7 ---
+    "s&p 500", "s&p500", "sp500", "nasdaq", "dow jones",
+    "apple", "microsoft", "nvidia", "amazon", "meta", "alphabet",
+    "google", "tesla", "magnificent seven", "magnificent 7",
 }
 
-ALL_KEYWORDS = CRYPTO_MAJORS | CRYPTO_ALTCOINS | MARKET_TERMS | MACRO_TERMS
-
-# High-signal terms that raise an item's importance.
-HIGH_IMPACT_TERMS = {
-    "sec", "fed", "federal reserve", "fomc", "ecb", "boj", "etf",
-    "lawsuit", "ban", "hack", "exploit", "halving", "rate cut",
-    "rate hike", "rate decision", "approval", "bankruptcy", "default",
-    "all-time high", "crash", "plunge", "surge", "interest rate",
+# TIER 2 — MEDIUM priority. Relevant, but a hit alone is a weaker signal.
+TIER2_TERMS = {
+    # --- large-cap US equities beyond the Mag 7 ---
+    "berkshire", "jpmorgan", "jp morgan", "goldman sachs", "morgan stanley",
+    "broadcom", "amd", "netflix", "exxon", "chevron", "walmart",
+    "eli lilly", "visa", "mastercard", "palantir", "oracle",
+    # --- commodities ---
+    "gold", "xau", "silver", "oil", "brent", "wti", "crude",
+    "natural gas", "copper",
+    # --- corporate events ---
+    "earnings", "guidance", "merger", "acquisition", "m&a", "buyback",
+    "ipo", "bankruptcy", "layoffs", "downgrade", "upgrade", "delisting",
+    # --- other crypto assets / events ---
+    "altcoin", "defi", "mining", "halving", "hack", "exploit",
+    "cardano", "ada", "avalanche", "avax", "polkadot", "dot",
+    "chainlink", "link", "litecoin", "dogecoin", "doge", "toncoin", "ton",
+    "aptos", "sui", "arbitrum", "optimism", "tron", "trx", "shiba",
+    "kraken", "bybit", "okx",
+    # --- FX / rates / funds (secondary) ---
+    "forex", "fx", "eur/usd", "usd/jpy", "gbp/usd", "euro", "yen",
+    "yuan", "renminbi", "pound", "bond", "bonds", "yield", "yields",
+    "hedge fund", "hedge funds", "fund flows", "fidelity", "vanguard",
+    "institutional",
 }
+
+RELEVANT_KEYWORDS = TIER1_TERMS | TIER2_TERMS
+# Backwards-compatible alias (referenced in docs / older callers).
+ALL_KEYWORDS = RELEVANT_KEYWORDS
+
+# === Catalyst terms — concrete, market-moving actions ======================
+# These signal a real event (not a recap or an opinion) and earn a boost.
+CATALYST_TERMS = {
+    "approves", "approval", "approved", "rejects", "rejected", "rejection",
+    "announces", "announced", "unveils", "launches", "launched", "files",
+    "filing", "sues", "lawsuit", "charged", "settlement", "fined", "fine",
+    "hikes", "cuts", "raises", "slashes", "halts", "suspends", "freezes",
+    "bans", "ban", "delays", "postpones",
+    "beats", "misses", "record", "all-time high", "plunges", "plunge",
+    "crashes", "crash", "soars", "surges", "surge", "tumbles", "spikes",
+    "hack", "hacked", "breach", "default", "defaults", "bankruptcy",
+    "acquires", "acquired", "stake", "liquidation",
+    "resigns", "sanctions",
+}
+
+# === Penalty vocabularies =================================================
+# Obscure / regional indexes & local markets — noise for a crypto/macro desk.
+REGIONAL_NOISE_TERMS = {
+    "ftse", "ftse 100", "dax", "cac 40", "cac", "ibex", "ftse mib",
+    "aex", "smi", "omx", "wig20", "athex",
+    "nikkei", "topix", "hang seng", "shanghai composite", "csi 300",
+    "shenzhen", "kospi", "kosdaq", "sensex", "nifty", "nifty 50",
+    "asx 200", "asx", "nzx", "set index", "straits times",
+    "jakarta", "psei", "vn-index", "klci", "bursa", "tadawul",
+    "bovespa", "ibovespa", "merval", "moex", "borsa istanbul",
+    "bist 100", "tsx", "egx",
+}
+
+# Opinion / analyst commentary markers — soft penalty (the hard opinion gate
+# in should_publish handles unsourced predictions).
+COMMENTARY_TERMS = {
+    "analyst", "analysts", "strategist", "strategists", "outlook",
+    "opinion", "commentary", "op-ed", "column", "explainer",
+    "what to watch", "here's why", "here is why", "things to know",
+    "what to know", "could", "may", "might", "expected to", "poised to",
+    "set to", "forecast", "prediction", "predicts", "sees", "view",
+}
+
+# "Just describes a move" phrases — routine recaps with no real news.
+_ROUTINE_PHRASES = [
+    re.compile(r"\bmarket\s+wrap\b", re.I),
+    re.compile(r"\bclosing\s+bell\b", re.I),
+    re.compile(r"\bmid-?day\b", re.I),
+    re.compile(r"\bpre-?market\b", re.I),
+    re.compile(r"\bstocks?\s+to\s+watch\b", re.I),
+    re.compile(r"\bweek\s+ahead\b", re.I),
+    re.compile(r"\bday\s+ahead\b", re.I),
+    re.compile(r"\bmarket\s+recap\b", re.I),
+    re.compile(r"\bstocks?\s+(?:end|close[ds]?|finish)\s+(?:mixed|flat|higher|lower)\b", re.I),
+    re.compile(r"\bwall\s+street\s+(?:wrap|recap)\b", re.I),
+]
+# A bare "X up/down 0.4%" move with no other signal.
+_MOVE_RE = re.compile(
+    r"\b(?:up|down|higher|lower|rises?|rose|falls?|fell|gains?|gained|"
+    r"drops?|dropped|slips?|slipped|climbs?|climbed|adds?|sheds?|"
+    r"loses?|lost|edges?|ticks?)\b[^.]{0,20}?\b\d+(?:\.\d+)?\s*%",
+    re.I,
+)
 
 # Advertising / low-value noise.
 AD_PATTERNS = [
@@ -92,14 +168,14 @@ HOROSCOPE_PATTERNS = [
     re.compile(r"next (?:big|100x|1000x)", re.I),
 ]
 
-# Opinion/forecast markers — these require an influential author.
+# Opinion/forecast markers — these require an influential author. Deliberately
+# excludes "forecast"/"expects": those appear in factual beat/miss-vs-estimates
+# reporting ("hotter than forecast", "above expectations") on hard releases.
 OPINION_MARKERS = [
     re.compile(r"\bpredict", re.I),
-    re.compile(r"\bforecast", re.I),
     re.compile(r"\bsays\b", re.I),
     re.compile(r"\bbelieves\b", re.I),
     re.compile(r"\bopinion\b", re.I),
-    re.compile(r"\bexpects\b", re.I),
     re.compile(r"\bwarns\b", re.I),
 ]
 
@@ -112,6 +188,10 @@ INFLUENTIAL_AUTHORS = {
     "federal reserve", "ecb", "imf", "sec chair", "treasury secretary",
 }
 
+# Minimum impact score an item must reach to be published. Tunable via
+# MIN_IMPACT_TO_PUBLISH; the default trades volume for signal.
+DEFAULT_MIN_IMPACT = 45
+
 
 def _text_of(item: NewsItem) -> str:
     return f"{item.title} {item.summary}".lower()
@@ -122,25 +202,45 @@ def _build_keyword_matcher(keywords):
     'ada' inside 'Canada' or 'oil' inside 'boil'); symbol-bearing keywords
     like 's&p' or 'eur/usd' fall back to substring matching."""
     words = sorted(
-        (k for k in keywords if re.fullmatch(r"[a-z0-9 -]+", k)),
+        (k for k in keywords if re.fullmatch(r"[a-z0-9 '-]+", k)),
         key=len,
         reverse=True,
     )
-    symbols = [k for k in keywords if not re.fullmatch(r"[a-z0-9 -]+", k)]
+    symbols = [k for k in keywords if not re.fullmatch(r"[a-z0-9 '-]+", k)]
     pattern = re.compile(
         r"(?<![a-z0-9])(?:" + "|".join(re.escape(w) for w in words) + r")(?![a-z0-9])"
     )
     return pattern, symbols
 
 
-_KEYWORD_RE, _KEYWORD_SYMBOLS = _build_keyword_matcher(ALL_KEYWORDS)
+def _matches(text: str, pattern, symbols) -> bool:
+    if pattern.search(text):
+        return True
+    return any(sym in text for sym in symbols)
+
+
+def _count_distinct(text: str, pattern, symbols) -> int:
+    found = set(pattern.findall(text))
+    found |= {sym for sym in symbols if sym in text}
+    return len(found)
+
+
+_TIER1_RE, _TIER1_SYM = _build_keyword_matcher(TIER1_TERMS)
+_TIER2_RE, _TIER2_SYM = _build_keyword_matcher(TIER2_TERMS)
+_RELEVANT_RE, _RELEVANT_SYM = _build_keyword_matcher(RELEVANT_KEYWORDS)
+_CATALYST_RE, _CATALYST_SYM = _build_keyword_matcher(CATALYST_TERMS)
+_REGIONAL_RE, _REGIONAL_SYM = _build_keyword_matcher(REGIONAL_NOISE_TERMS)
+_COMMENTARY_RE, _COMMENTARY_SYM = _build_keyword_matcher(COMMENTARY_TERMS)
 
 
 def matches_keywords(item: NewsItem) -> bool:
-    text = _text_of(item)
-    if _KEYWORD_RE.search(text):
+    """True if the item touches our universe (crypto / macro / mega-caps).
+
+    Official sources (regulators / central banks) are always relevant even if
+    a headline is terse."""
+    if item.official:
         return True
-    return any(sym in text for sym in _KEYWORD_SYMBOLS)
+    return _matches(_text_of(item), _RELEVANT_RE, _RELEVANT_SYM)
 
 
 def is_ad(item: NewsItem) -> bool:
@@ -166,20 +266,70 @@ def has_influential_author(item: NewsItem) -> bool:
     return any(name in text for name in INFLUENTIAL_AUTHORS)
 
 
-_HIGH_IMPACT_RE = re.compile(
-    r"(?<![a-z0-9])(?:"
-    + "|".join(re.escape(t) for t in sorted(HIGH_IMPACT_TERMS, key=len, reverse=True))
-    + r")(?![a-z0-9])"
-)
+# --- Noise detectors (used by scoring) ------------------------------------
+def has_tier1(item: NewsItem) -> bool:
+    return _matches(_text_of(item), _TIER1_RE, _TIER1_SYM)
+
+
+def is_regional_noise(item: NewsItem) -> bool:
+    """A regional/obscure index or local market with no tier-1 anchor."""
+    text = _text_of(item)
+    if not _matches(text, _REGIONAL_RE, _REGIONAL_SYM):
+        return False
+    return not _matches(text, _TIER1_RE, _TIER1_SYM)
+
+
+def is_commentary(item: NewsItem) -> bool:
+    return _matches(_text_of(item), _COMMENTARY_RE, _COMMENTARY_SYM)
+
+
+def is_routine_move(item: NewsItem) -> bool:
+    """A plain recap that merely restates a market move (no catalyst)."""
+    text = f"{item.title} {item.summary}"
+    if any(p.search(text) for p in _ROUTINE_PHRASES):
+        return True
+    return bool(_MOVE_RE.search(text))
 
 
 def score_impact(item: NewsItem) -> int:
-    """Return an updated impact score (does not mutate the item)."""
+    """Return a 0-100 impact/signal score (does not mutate the item).
+
+    Built from the source-seeded base plus tiered relevance and catalyst
+    boosts, minus penalties for regional noise, commentary and catalyst-free
+    move recaps. ``filter_items`` rejects anything below the publish bar.
+    """
     text = _text_of(item)
-    score = item.impact
+    score = item.impact  # source-seeded base (catalog base_impact)
+
     if item.official:
         score += 25
-    score += 10 * len(set(_HIGH_IMPACT_RE.findall(text)))
+
+    tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
+    tier2 = _count_distinct(text, _TIER2_RE, _TIER2_SYM)
+    catalysts = _count_distinct(text, _CATALYST_RE, _CATALYST_SYM)
+
+    # Boosts (capped so two strong hits already saturate the signal).
+    score += 18 * min(tier1, 2)          # up to +36
+    score += 8 * min(tier2, 2)           # up to +16
+    score += 10 * min(catalysts, 2)      # up to +20
+
+    # Penalties — only bite when there is no tier-1 anchor, so a genuine
+    # Fed/BTC story with a stray analyst quote is not nuked.
+    if tier1 == 0:
+        if _matches(text, _REGIONAL_RE, _REGIONAL_SYM):
+            score -= 30                  # obscure / regional market
+        if _matches(text, _COMMENTARY_RE, _COMMENTARY_SYM) and not item.official:
+            score -= 15                  # generic analyst commentary
+        if catalysts == 0 and (
+            any(p.search(text) for p in _ROUTINE_PHRASES)
+            or _MOVE_RE.search(text)
+        ):
+            score -= 25                  # merely restates a move, no catalyst
+
+    # Unsourced opinion with no influential author / official backing.
+    if is_opinion(item) and not (item.official or has_influential_author(item)):
+        score -= 20
+
     return max(0, min(100, score))
 
 
@@ -240,7 +390,10 @@ def is_historical(item: NewsItem) -> bool:
 
 
 def should_publish(item: NewsItem) -> bool:
-    """The master mechanical gate. True => worth the AI call."""
+    """The categorical relevance gate. True => worth scoring for publication.
+
+    Numeric impact thresholding happens in ``filter_items``; this only weeds
+    out items that are categorically out of scope."""
     if not matches_keywords(item):
         return False
     if is_ad(item):
@@ -255,11 +408,17 @@ def should_publish(item: NewsItem) -> bool:
     return True
 
 
-def filter_items(items: Iterable[NewsItem]) -> list[NewsItem]:
-    """Apply the gate and refresh impact scores for survivors."""
+def filter_items(
+    items: Iterable[NewsItem], min_impact: int = DEFAULT_MIN_IMPACT
+) -> list[NewsItem]:
+    """Apply the relevance gate, refresh impact scores, and DROP anything
+    below the publish bar. This is where low-value noise is rejected."""
     kept: list[NewsItem] = []
     for item in items:
-        if should_publish(item):
-            item.impact = score_impact(item)
-            kept.append(item)
+        if not should_publish(item):
+            continue
+        item.impact = score_impact(item)
+        if item.impact < min_impact and not item.official:
+            continue
+        kept.append(item)
     return kept

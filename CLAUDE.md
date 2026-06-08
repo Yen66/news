@@ -72,12 +72,20 @@ Single Python 3.11 process, one container:
 
 ### `src/pipeline/`
 
-- `filters.py` — vocabularies (`CRYPTO_MAJORS` / `CRYPTO_ALTCOINS` /
-  `MARKET_TERMS` / `MACRO_TERMS`), word-boundary keyword matcher,
-  `is_ad` / `is_price_horoscope` / `is_opinion` /
-  `has_influential_author`, `score_impact` (boundary-based — `ban` does
-  not match `bank`), `is_historical` /
-  `title_is_historical`, and `should_publish` master gate.
+- `filters.py` — **tiered relevance + impact scoring.**
+  `TIER1_TERMS` (HIGH: BTC/ETH, central banks, CPI/PPI/NFP, ETF flows,
+  SEC, DXY, S&P/Nasdaq, Mag 7, BlackRock/Coinbase/MicroStrategy/Binance)
+  and `TIER2_TERMS` (MEDIUM: large-cap equities, commodities, earnings/
+  M&A, alt-coins, FX). `matches_keywords` requires a tier term (official
+  sources always relevant). `score_impact` is a 0-100 model: base +
+  official +25 + tier-1 (×18, cap 2) + tier-2 (×8, cap 2) + catalyst
+  (×10, cap 2), minus penalties for `REGIONAL_NOISE_TERMS`, commentary,
+  and catalyst-free move recaps (`is_routine_move`) — penalties only bite
+  with no tier-1 anchor. `should_publish` is the categorical gate (ad /
+  horoscope / opinion-without-influential-author / historical).
+  `filter_items` rescores and **rejects anything below
+  `MIN_IMPACT_TO_PUBLISH`** (official bypasses). Boundary-based — `ban`
+  does not match `bank`.
 - `dedup.py` — `Deduplicator`: permanent uid-based seen-set (backed by
   the repository on startup).
 - `story.py` — `StoryDeduplicator`: time-windowed (`STORY_DEDUP_WINDOW_HOURS`,
@@ -156,6 +164,7 @@ All read in `src/config.py`. **Note: config lives at `src/config.py`, not
 | `MAX_NEW_PER_CYCLE` | `3` | Anti-flood — max items queued per poll. |
 | `MAX_ARTICLE_AGE_HOURS` | `24` | Drop anything older than this or with no pubDate. |
 | `STORY_DEDUP_WINDOW_HOURS` | `6.0` | Window for cross-source story dedup. |
+| `MIN_IMPACT_TO_PUBLISH` | `45` | Min 0-100 impact score to publish; drops regional/commentary/recap noise. Official sources bypass. |
 | `ENABLE_EDITOR` | `true` | Run a second AI pass to proofread. |
 | `AI_CALL_MIN_INTERVAL_SECONDS` | `15.0` | Min gap between consecutive AI calls. |
 | `DAILY_AI_CALL_BUDGET` | `100` | Soft cap; low-impact items skip once exhausted, official/high-impact still go through. |
@@ -174,10 +183,13 @@ In `app.py::_poll_once`:
    years ≤ last year, or body with retrospective phrases (`в 2022 году`,
    `back in 2023`, `year-in-review`, `ретроспектив*`, `годовщин*`) AND no
    current/last-year date anywhere. Mark seen so we don't re-evaluate.
-3. **Keyword filter** — `filters.filter_items` runs `should_publish`:
-   `matches_keywords` (word-boundary across crypto + macro vocab) AND not
-   `is_ad` AND not `is_price_horoscope` AND not `is_opinion`-without-an-
-   influential-author. Survivors get their `impact` rescored.
+3. **Relevance + impact filter** — `filters.filter_items` runs
+   `should_publish` (`matches_keywords` over the tiered vocab AND not
+   `is_ad` / `is_price_horoscope` / `is_opinion`-without-influential-
+   author / historical), then rescores `impact` via `score_impact` and
+   **drops anything below `MIN_IMPACT_TO_PUBLISH`** (regional indexes,
+   generic commentary, catalyst-free move recaps). Official bypasses the
+   bar. Logged as `low_impact=N` in the poll line.
 4. **Exact dedup** — `Deduplicator.filter_new` by `uid` (sha256 of
    guid/link). DB-backed, permanent.
 5. **Story dedup** — `StoryDeduplicator.is_recent(story_key)` against a 6h
