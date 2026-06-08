@@ -132,6 +132,11 @@ class Config:
     log_level: str
     dry_run: bool
     min_impact_to_publish: int = 45
+    # --- pre-event alerts (calendar-driven, gated; live publishing later) ---
+    enable_pre_event_alerts: bool = False
+    pre_event_calendar_path: str = "src/events/calendar.yaml"
+    pre_event_grace_minutes: int = 20
+    pre_event_tick_seconds: int = 60
 
     @property
     def usable_providers(self) -> List[ProviderConfig]:
@@ -236,4 +241,10 @@ def load_config() -> Config:
         log_level=_get("LOG_LEVEL", "INFO"),
         dry_run=_get_bool("DRY_RUN", False),
         min_impact_to_publish=_get_int("MIN_IMPACT_TO_PUBLISH", 45),
+        enable_pre_event_alerts=_get_bool("ENABLE_PRE_EVENT_ALERTS", False),
+        pre_event_calendar_path=_get(
+            "PRE_EVENT_CALENDAR_PATH", "src/events/calendar.yaml"
+        ),
+        pre_event_grace_minutes=_get_int("PRE_EVENT_GRACE_MINUTES", 20),
+        pre_event_tick_seconds=_get_int("PRE_EVENT_TICK_SECONDS", 60),
     )

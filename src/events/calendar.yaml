@@ -1,0 +1,83 @@
+# =============================================================================
+# CMW_News — pre-event alert calendar (SOURCE OF TRUTH)
+# =============================================================================
+# Hand-curated. Refresh quarterly — every event below is published months ahead
+# by its authority (Fed/ECB/BOJ calendars, BLS release schedule, SEC deadlines).
+#
+# Each entry:
+#   type:       stable slug (used in the deterministic event_id). Keep unique.
+#   title:      short Russian label shown in the alert.
+#   time:       local clock time, "YYYY-MM-DD HH:MM" (24h).
+#   tz:         IANA timezone (e.g. America/New_York) or "UTC". DST handled.
+#   importance: critical (24h+1h) | standard (1h) | special (manual-only, 1h)
+#   offsets:    OPTIONAL override, e.g. ["1h"]. Omit to use the tier default.
+#   consensus:  OPTIONAL forecast string, shown in the 24h alert.
+#   source_url: OPTIONAL link to the authority's schedule.
+#   status:     OPTIONAL "scheduled" (default) | "cancelled".
+#
+# Alert design:
+#   CRITICAL  -> FOMC, CPI, NFP, SEC ETF decisions   (24h + 1h)
+#   STANDARD  -> ECB, BOJ                             (1h)
+#   SPECIAL   -> Jackson Hole, Powell testimony, major SEC hearings,
+#                pre-announced major Trump speeches   (1h, ADD MANUALLY)
+#
+# NOTE: dates below are ILLUSTRATIVE placeholders — replace with the real
+# published schedule before enabling ENABLE_PRE_EVENT_ALERTS.
+# =============================================================================
+
+# --- CRITICAL (24h + 1h) -----------------------------------------------------
+- type: cpi
+  title: "Инфляция в США (CPI)"
+  time: "2026-06-11 08:30"
+  tz: "America/New_York"
+  importance: critical
+  consensus: "ожидается 3,2% г/г"
+  source_url: "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+- type: fomc
+  title: "Решение ФРС по ставке + пресс-конференция Пауэлла"
+  time: "2026-06-17 14:00"
+  tz: "America/New_York"
+  importance: critical
+  consensus: "рынок ждёт сохранения ставки"
+  source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+- type: nfp
+  title: "Отчёт по занятости в США (NFP + безработица)"
+  time: "2026-07-03 08:30"
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+- type: sec_etf
+  title: "Дедлайн SEC по заявке на спотовый ETF"
+  time: "2026-07-15 12:00"
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.sec.gov/"
+
+# --- STANDARD (1h) -----------------------------------------------------------
+- type: ecb
+  title: "Решение ЕЦБ по ставке"
+  time: "2026-07-16 14:15"
+  tz: "Europe/Berlin"
+  importance: standard
+  source_url: "https://www.ecb.europa.eu/"
+
+- type: boj
+  title: "Решение Банка Японии по ставке"
+  time: "2026-07-31 12:00"
+  tz: "Asia/Tokyo"
+  importance: standard
+  source_url: "https://www.boj.or.jp/en/"
+
+# --- SPECIAL (manual-only, 1h) ----------------------------------------------
+# Add ONLY when a rare, genuinely market-moving event is pre-announced.
+# Inclusion test: would a flat trader want to be at the screen? scheduled
+# >=1h out? not already a recurring entry? -> all yes -> add.
+- type: jackson_hole
+  title: "Симпозиум в Джексон-Хоул: речь Пауэлла"
+  time: "2026-08-21 10:00"
+  tz: "America/Denver"
+  importance: special
+  source_url: "https://www.kansascityfed.org/"

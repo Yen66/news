@@ -37,6 +37,22 @@ class Repository(ABC):
     @abstractmethod
     async def archive_post(self, post: Post) -> None: ...
 
+    # --- pre-event alert dedup --------------------------------------------
+    @abstractmethod
+    async def load_fired_alerts(self) -> Set[Tuple[str, str]]:
+        """Return ``{(event_id, offset_label), …}`` already fired."""
+
+    @abstractmethod
+    async def alert_fired(self, event_id: str, offset_label: str) -> bool:
+        """True if this (event, offset) alert was already recorded."""
+
+    @abstractmethod
+    async def mark_alert_fired(
+        self, event_id: str, offset_label: str, status: str = "sent"
+    ) -> bool:
+        """Record an alert as fired. Returns True if newly inserted, False if
+        it was already present (idempotent — safe under retries/restarts)."""
+
 
 class InMemoryRepository(Repository):
     """Zero-dependency fallback. State is lost on restart (no DB)."""
@@ -45,6 +61,7 @@ class InMemoryRepository(Repository):
         self._uids: Set[str] = set()
         self._keys: Set[str] = set()
         self.archived: List[Post] = []
+        self._fired_alerts: Set[Tuple[str, str]] = set()
 
     async def connect(self) -> None:
         log.warning(
@@ -64,6 +81,32 @@ class InMemoryRepository(Repository):
 
     async def archive_post(self, post: Post) -> None:
         self.archived.append(post)
+
+    async def load_fired_alerts(self) -> Set[Tuple[str, str]]:
+        return set(self._fired_alerts)
+
+    async def alert_fired(self, event_id: str, offset_label: str) -> bool:
+        return (event_id, offset_label) in self._fired_alerts
+
+    async def mark_alert_fired(
+        self, event_id: str, offset_label: str, status: str = "sent"
+    ) -> bool:
+        key = (event_id, offset_label)
+        if key in self._fired_alerts:
+            return False
+        self._fired_alerts.add(key)
+        return True
+
+
+def _rowcount_from_status(status: str) -> int:
+    """Parse the affected-row count from an asyncpg command status string.
+
+    e.g. ``"INSERT 0 1"`` -> 1, ``"INSERT 0 0"`` (ON CONFLICT no-op) -> 0.
+    """
+    try:
+        return int(status.split()[-1])
+    except (ValueError, IndexError, AttributeError):
+        return 0
 
 
 _SCHEMA = """
@@ -90,6 +133,17 @@ CREATE TABLE IF NOT EXISTS archive (
     provider_used TEXT NOT NULL DEFAULT '',
     editor_used   BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Pre-event alert dedup ledger. The composite primary key is the duplicate
+-- guard: a given (event, offset) can be recorded exactly once, so retries,
+-- overlapping ticks and restarts can never double-send.
+CREATE TABLE IF NOT EXISTS event_alerts (
+    event_id      TEXT NOT NULL,
+    offset_label  TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'sent',
+    fired_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (event_id, offset_label)
 );
 """
 
@@ -163,6 +217,42 @@ class PostgresRepository(Repository):
                 post.editor_used,
                 post.created_at,
             )
+
+    async def load_fired_alerts(self) -> Set[Tuple[str, str]]:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT event_id, offset_label FROM event_alerts"
+            )
+        return {(r["event_id"], r["offset_label"]) for r in rows}
+
+    async def alert_fired(self, event_id: str, offset_label: str) -> bool:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT 1 FROM event_alerts "
+                "WHERE event_id = $1 AND offset_label = $2",
+                event_id,
+                offset_label,
+            )
+        return row is not None
+
+    async def mark_alert_fired(
+        self, event_id: str, offset_label: str, status: str = "sent"
+    ) -> bool:
+        assert self._pool is not None
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                INSERT INTO event_alerts (event_id, offset_label, status)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (event_id, offset_label) DO NOTHING
+                """,
+                event_id,
+                offset_label,
+                status,
+            )
+        return _rowcount_from_status(result) > 0
 
 
 def build_repository(database_url: str) -> Repository:
