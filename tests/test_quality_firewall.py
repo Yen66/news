@@ -110,23 +110,35 @@ def test_explainers_dropped():
 
 # --- Question-style titles --------------------------------------------------
 
+# Question-style titles with NO hard news signal -> dropped (FIX-B).
 QUESTION_CASES = [
-    "Will Bitcoin reach $200K",
     "What is staking",
     "How to buy Ethereum",
-    "Should you sell now",
+    "Why is inflation elevated",
     "Is the Fed pivoting",
-    "Why is inflation high",
-    "Could Bitcoin hit a new high",
     "Are we in a recession",
-    "When will the Fed cut rates",
     "How does Ethereum staking work",
+    "When should you buy crypto",
+    "Who controls Bitcoin",
+    "Where is the dollar headed",
+    "Could Bitcoin replace gold",
 ]
 
 
-def test_question_titles_dropped():
+def test_question_titles_without_signal_dropped():
     for title in QUESTION_CASES:
         assert filters.is_invalid_noise(make_item(title)), title
+
+
+def test_question_titles_with_strong_signal_pass():
+    # FIX-B drops question titles ONLY when they lack a hard news signal.
+    # A concrete number / time anchor / catalyst rescues them.
+    for title in [
+        "Will Bitcoin reach $200K",            # number
+        "Will the Fed cut rates today",        # current anchor
+        "Is inflation still above 3% this week",  # number + anchor
+    ]:
+        assert not filters.is_invalid_noise(make_item(title)), title
 
 
 # --- ZeroHedge extra scrutiny -----------------------------------------------
@@ -273,7 +285,7 @@ def test_filter_items_drops_noise_before_other_logic():
         # Noise — must drop
         make_item("How Bitcoin survived the 2022 bear market"),
         make_item("Experts say AI caused the BTC decline"),
-        make_item("Will Bitcoin reach $200K"),
+        make_item("What is a Bitcoin halving"),
         make_item("Looking back at the FTX collapse"),
         make_item("Bitcoin halving explained"),
         # Real news — must keep
@@ -287,7 +299,7 @@ def test_filter_items_drops_noise_before_other_logic():
     for noise in [
         "How Bitcoin survived the 2022 bear market",
         "Experts say AI caused the BTC decline",
-        "Will Bitcoin reach $200K",
+        "What is a Bitcoin halving",
         "Looking back at the FTX collapse",
         "Bitcoin halving explained",
     ]:

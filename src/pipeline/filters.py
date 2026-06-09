@@ -490,6 +490,11 @@ def should_publish(item: NewsItem) -> bool:
 
     Numeric impact thresholding happens in ``filter_items``; this only weeds
     out items that are categorically out of scope."""
+    # FIX-D: the data-quality firewall is the FIRST gate, so every caller of
+    # should_publish (incl. /test-post) inherits it — it is no longer only
+    # reachable through filter_items.
+    if is_invalid_noise(item):
+        return False
     # Obvious junk is dropped even for speech items.
     if is_ad(item):
         return False
@@ -505,6 +510,11 @@ def should_publish(item: NewsItem) -> bool:
         return False
     # Opinions/forecasts only from influential people with a track record.
     if is_opinion(item) and not (item.official or has_influential_author(item)):
+        return False
+    # FIX-A: positive-signal floor. Replaces allow-by-default — a non-official
+    # item must carry a real news signal (anchor / number / catalyst / named
+    # tier-1 institution), else it is topic/opinion/explainer filler.
+    if not item.official and not has_news_signal(item):
         return False
     return True
 
@@ -566,29 +576,56 @@ _COMMENTARY_NOISE_PHRASES = (
     "primer on", "understanding the",
     "everything you need to know", "all you need to know",
     "what to know about", "things to know about", "things to watch",
+    "need to know", "things to know", "the case for",
 )
 
-# Question-style title patterns — speculation / explainer / clickbait.
-# Anchored to the start of the title so "today's CPI is hot" doesn't trip
-# the "is " match while "Is the Fed pivoting" does.
-_QUESTION_TITLE_RE = re.compile(
-    r"^\s*(?:"
-    r"what\s+(?:is|are|does|do|did|will|happened|caused|causes|makes)"
-    r"|how\s+(?:to|do|does|did|will|can|much|many)"
-    r"|why\s+(?:is|are|did|do|does|will|the)"
-    r"|where\s+(?:is|are|did|do|does|will|to)"
-    r"|when\s+(?:will|did|do|does)"
-    r"|is\s+(?:the|this|that|it|bitcoin|btc|ethereum|crypto)\s"
-    r"|are\s+(?:we|the|investors|traders|stocks)"
-    r"|will\s+(?:bitcoin|btc|ethereum|eth|the\s+fed|the\s+ecb|gold|"
-    r"stocks|trump|powell)"
-    r"|should\s+(?:you|we|i|investors)"
-    r"|could\s+(?:bitcoin|btc|ethereum|eth|this|the)"
-    r"|would\s+(?:bitcoin|btc|ethereum)"
-    r"|does\s+(?:bitcoin|btc|ethereum|the\s+fed)"
-    r")\b",
+# Structural question/clickbait detection (FIX-B): any title that OPENS with
+# an interrogative word is speculation / explainer / clickbait UNLESS it also
+# carries a hard news signal. Replaces the old subject-specific list.
+_QUESTION_START_RE = re.compile(
+    r"^\s*(?:what|why|how|when|where|who|is|are|can|could|would|should|will)\b",
     re.IGNORECASE,
 )
+
+# Concrete market-data numbers: currency+digit, digit+%, a magnitude-suffixed
+# figure, or a 3+ digit figure (price / level). A bare "5" / "10" does NOT
+# qualify, so listicles ("5 things to know") get no numeric signal.
+_NEWS_NUMBER_RE = re.compile(
+    r"[$€£₽₿]\s?\d"
+    r"|\d[\d.,]*\s?%"
+    r"|\b\d[\d.,]*\s?(?:k|m|bn|b|tr|trillion|billion|million|thousand|"
+    r"млн|млрд|трлн|тыс)\b"
+    r"|\b\d{3,}\b",
+    re.IGNORECASE,
+)
+
+
+def _has_hard_news_signal(item: NewsItem) -> bool:
+    """A 'this is a real current event' signal that does NOT rely on merely
+    naming a topic: a current/future time anchor, concrete market data, or a
+    catalyst verb (announces/approves/files/cuts/hikes/surges/…)."""
+    text = f"{item.title} {item.summary}"
+    if _CURRENT_FUTURE_RE.search(text):
+        return True
+    if _NEWS_NUMBER_RE.search(text):
+        return True
+    if _count_distinct(_text_of(item), _CATALYST_RE, _CATALYST_SYM):
+        return True
+    return False
+
+
+def has_news_signal(item: NewsItem) -> bool:
+    """Positive-signal floor (FIX-A). True if the item looks like real news.
+
+    Either a hard signal (anchor / number / catalyst) OR a named tier-1
+    market-moving institution (SEC/Fed/ECB/Treasury/ETF/exchange/major
+    crypto company), per the required signal list. Used to REPLACE the
+    allow-by-default behaviour for non-official sources.
+    """
+    if _has_hard_news_signal(item):
+        return True
+    return _matches(_text_of(item), _TIER1_RE, _TIER1_SYM)
+
 
 # Retrospective-explanation verbs ("why X happened / what caused Y" content).
 _RETRO_EXPLAIN_RE = re.compile(
@@ -645,8 +682,9 @@ def is_invalid_noise(item: NewsItem) -> bool:
     ):
         return True
 
-    # D) Question-style titles.
-    if _QUESTION_TITLE_RE.search(title):
+    # D) Question / clickbait titles (structural): opens with an interrogative
+    #    word and has no hard news signal -> speculation / explainer.
+    if _QUESTION_START_RE.match(title) and not _has_hard_news_signal(item):
         return True
 
     # E) ZeroHedge: extra scrutiny. Drop if any of:

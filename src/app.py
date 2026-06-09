@@ -153,10 +153,16 @@ class NewsBotApp:
         if not items:
             return {"published": False, "error": "no items fetched from CoinDesk"}
 
-        # Prefer an item that passes the normal filters; otherwise just take
-        # the first so the pipeline is still exercised.
-        item = next((i for i in items if should_publish(i)), items[0])
-        item.impact = score_impact(item)
+        # Run the SAME production filter path (firewall + relevance + impact
+        # floor). test-post must never publish anything production would
+        # reject — so there is NO fallback to an unfiltered item.
+        candidates = filter_items(items, self._config.min_impact_to_publish)
+        if not candidates:
+            return {
+                "published": False,
+                "error": "no fetched item passed the production filters",
+            }
+        item = max(candidates, key=lambda i: i.impact)
 
         try:
             post = await self._writer.write(item)
