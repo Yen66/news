@@ -509,6 +509,80 @@ def should_publish(item: NewsItem) -> bool:
     return True
 
 
+# === Strict data-quality firewall =========================================
+# A deterministic pre-filter that drops historical / commentary / non-news
+# content BEFORE any other logic. Strict by design: false positives are
+# preferred over letting noise through.
+
+# Any year 2010–2025 (the CURRENT/future year, e.g. 2026, is intentionally
+# NOT matched, so genuine current-year news is never flagged historical).
+_NOISE_YEAR_RE = re.compile(r"\b20(?:1[0-9]|2[0-5])\b")
+
+# Wording that clearly anchors an item to a current/imminent event.
+_CURRENT_FUTURE_RE = re.compile(
+    r"\b(?:today|now|breaking|upcoming|will|tonight|this\s+(?:morning|"
+    r"afternoon|evening|week)|tomorrow|сегодня|сейчас|завтра)\b",
+    re.IGNORECASE,
+)
+
+# Commentary / opinion / blog markers (substring, case-insensitive).
+_COMMENTARY_NOISE_PHRASES = (
+    "according to", "experts say", "analysts say", "some say",
+    "believe that", "opinion", "analysis", "op-ed", "blog", "thread",
+)
+
+# Retrospective-explanation verbs ("why X happened" content).
+_RETRO_EXPLAIN_RE = re.compile(
+    r"\b(?:caused|causing|explains?|explained|blamed?|"
+    r"here'?s\s+why|reason\s+why|what\s+happened|looking\s+back)\b",
+    re.IGNORECASE,
+)
+# Crypto subjects whose past price post-mortems are noise.
+_CRYPTO_SUBJECT_RE = re.compile(
+    r"\b(?:bitcoin|btc|ethereum|eth|crypto|altcoin|solana|sol|xrp)\b",
+    re.IGNORECASE,
+)
+
+
+def is_invalid_noise(item: NewsItem) -> bool:
+    """Strict data-quality firewall. True => drop the item outright.
+
+    Blocks (any one is sufficient):
+      A) historical content — a 2010–2025 year with no current/future anchor;
+      B) commentary / opinion / blog / analysis phrasing;
+      C) retrospective crypto post-mortems ("why BTC crashed", incl. years);
+      D) ZeroHedge items with any historical framing.
+    Deterministic; runs before everything else in ``filter_items``.
+    """
+    text = f"{item.title} {item.summary}"
+    low = text.lower()
+    has_year = bool(_NOISE_YEAR_RE.search(text))
+    has_current = bool(_CURRENT_FUTURE_RE.search(text))
+
+    # A) Historical content.
+    if has_year and not has_current:
+        return True
+
+    # B) Commentary / opinion / blog.
+    if any(phrase in low for phrase in _COMMENTARY_NOISE_PHRASES):
+        return True
+
+    # C) Retrospective crypto noise: explanation verbs, especially with a year
+    #    or a crypto subject; an old year + explanation is always retrospective.
+    has_explain = bool(_RETRO_EXPLAIN_RE.search(text))
+    if has_explain and (has_year or _CRYPTO_SUBJECT_RE.search(text)):
+        return True
+
+    # D) ZeroHedge low-quality retrospectives: any historical framing → drop.
+    src = f"{item.source_id} {item.source_name}".lower()
+    if "zerohedge" in src and (
+        has_year or any(p.search(text) for p in _HISTORICAL_PHRASES)
+    ):
+        return True
+
+    return False
+
+
 def filter_items(
     items: Iterable[NewsItem], min_impact: int = DEFAULT_MIN_IMPACT
 ) -> list[NewsItem]:
@@ -516,6 +590,11 @@ def filter_items(
     below the publish bar. This is where low-value noise is rejected."""
     kept: list[NewsItem] = []
     for item in items:
+        # Strict data-quality firewall — runs BEFORE keyword filtering,
+        # speech detection, scoring and AI writing. Non-news / historical /
+        # commentary content is dropped here unconditionally.
+        if is_invalid_noise(item):
+            continue
         if not should_publish(item):
             continue
         item.impact = score_impact(item)
