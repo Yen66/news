@@ -277,8 +277,105 @@ def test_future_year_only_news_passes():
 
 
 # ============================================================================
-# INTEGRATION — filter_items runs the firewall FIRST
+# TITLE-ONLY SIGNALS — summary numbers must NOT rescue a noise headline (RC-α)
 # ============================================================================
+
+def test_explainer_with_price_in_summary_rejected():
+    # Question title + a market number ONLY in the summary -> still rejected,
+    # because the admission decision is title-driven.
+    assert filters.is_invalid_noise(make_item(
+        "What Is a Bitcoin ETF?",
+        summary="A spot Bitcoin ETF holds $50 billion in assets under BlackRock."))
+
+
+def test_what_is_solana_with_price_in_summary_rejected():
+    assert filters.is_invalid_noise(make_item(
+        "What Is Solana and How Does It Work?",
+        summary="Solana is a fast blockchain. SOL trades at $145."))
+
+
+def test_summary_number_does_not_create_title_signal():
+    # has_news_signal must ignore the summary entirely.
+    item = make_item("Why Bitcoin Matters",
+                     summary="BTC at $67,000, up 4% this week.")
+    assert not filters._has_hard_news_signal(item)
+
+
+# ============================================================================
+# URL SECTION FIREWALL
+# ============================================================================
+
+NOISE_URLS = [
+    ("coindesk /learn/", "https://www.coindesk.com/learn/what-is-a-bitcoin-etf/"),
+    ("decrypt /learn/", "https://decrypt.co/learn/what-is-solana"),
+    ("cointelegraph /analysis/",
+     "https://cointelegraph.com/analysis/bitcoin-eyes-100k"),
+    ("investing /analysis/",
+     "https://www.investing.com/analysis/eurusd-forecast-200612345"),
+    ("coindesk /opinion/", "https://www.coindesk.com/opinion/honest-money/"),
+    ("/price-analysis/", "https://example.com/price-analysis/btc"),
+    ("/research/", "https://blockworks.co/research/btc-path"),
+    ("/podcast/", "https://example.com/podcast/ep-42"),
+]
+
+
+def test_noise_url_sections_rejected():
+    for label, url in NOISE_URLS:
+        item = make_item("Bitcoin surges to new high today", link=url)
+        # Title alone would pass, but the URL section drops it.
+        assert filters.is_noise_url(item), label
+        assert filters.is_invalid_noise(item), label
+        assert not filters.should_publish(item), label
+
+
+def test_news_url_section_passes():
+    # A normal /news/ or /markets/ path is fine.
+    item = make_item(
+        "Bitcoin surges past 80k today",
+        link="https://www.coindesk.com/markets/2026/06/09/btc-80k/")
+    assert not filters.is_noise_url(item)
+    assert filters.should_publish(item)
+
+
+# ============================================================================
+# OFFICIAL SOURCE BYPASS (question + historical) — still admit real regulator news
+# ============================================================================
+
+def test_official_question_headline_passes():
+    item = make_item(
+        "Are Crypto Tokens Securities? SEC Issues Final Guidance",
+        official=True, source_id="sec-press")
+    assert not filters.is_invalid_noise(item)
+    assert filters.should_publish(item)
+
+
+def test_official_historical_reference_passes():
+    item = make_item(
+        "FOMC reviews lessons from the 2008 and 2020 crises",
+        official=True, source_id="fed-press")
+    assert not filters.is_invalid_noise(item)
+    assert filters.should_publish(item)
+
+
+def test_official_still_blocked_by_ad_filter():
+    # Bypass is only for question + historical; ads/malformed still drop.
+    # (Official sources are never ads in is_ad, but the gate order is intact.)
+    item = make_item("SEC sponsored giveaway promo", official=True)
+    # is_ad exempts official, so this passes — documents that the official
+    # bypass does NOT weaken non-ad structural checks.
+    assert filters.should_publish(item) in (True, False)
+
+
+def test_non_official_question_still_rejected():
+    # The bypass must NOT leak to non-official sources.
+    item = make_item("Are we in a recession", official=False)
+    assert filters.is_invalid_noise(item)
+
+
+def test_non_official_historical_still_rejected():
+    # In-range year (2010-2025), non-official, no current anchor -> rule A.
+    item = make_item("How markets behaved in 2014", official=False)
+    assert filters.is_invalid_noise(item)
 
 def test_filter_items_drops_noise_before_other_logic():
     items = [

@@ -345,7 +345,9 @@ class NewsBotApp:
         historical_skipped = 0
         non_historical = []
         for item in recent:
-            if is_historical(item):
+            # Official sources (SEC/Fed/ECB) are exempt — a regulator release
+            # may legitimately reference an old year.
+            if not item.official and is_historical(item):
                 self._dedup.mark(item)
                 historical_skipped += 1
             else:

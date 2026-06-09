@@ -500,7 +500,9 @@ def should_publish(item: NewsItem) -> bool:
         return False
     if is_price_horoscope(item):
         return False
-    if is_historical(item):
+    # Historical-year rejection is skipped for official sources (a regulator
+    # release may legitimately reference an old year).
+    if not item.official and is_historical(item):
         return False
     # Upcoming speeches bypass the keyword + opinion gates: a scheduled
     # appearance by a market-moving figure is publishable on its own.
@@ -601,30 +603,53 @@ _NEWS_NUMBER_RE = re.compile(
 
 
 def _has_hard_news_signal(item: NewsItem) -> bool:
-    """A 'this is a real current event' signal that does NOT rely on merely
-    naming a topic: a current/future time anchor, concrete market data, or a
-    catalyst verb (announces/approves/files/cuts/hikes/surges/…)."""
-    text = f"{item.title} {item.summary}"
-    if _CURRENT_FUTURE_RE.search(text):
+    """A 'this is a real current event' signal in the TITLE only.
+
+    TITLE-ONLY by design (RC-α fix): RSS summaries from crypto/markets feeds
+    almost always carry a price/%/ticker, which would let any Learn/opinion
+    article satisfy the floor. The admission decision must be title-driven;
+    the summary is only used later by the AI writer.
+    """
+    title = item.title or ""
+    if _CURRENT_FUTURE_RE.search(title):
         return True
-    if _NEWS_NUMBER_RE.search(text):
+    if _NEWS_NUMBER_RE.search(title):
         return True
-    if _count_distinct(_text_of(item), _CATALYST_RE, _CATALYST_SYM):
+    if _count_distinct(title.lower(), _CATALYST_RE, _CATALYST_SYM):
         return True
     return False
 
 
 def has_news_signal(item: NewsItem) -> bool:
-    """Positive-signal floor (FIX-A). True if the item looks like real news.
+    """Positive-signal floor (FIX-A). True if the TITLE looks like real news.
 
     Either a hard signal (anchor / number / catalyst) OR a named tier-1
     market-moving institution (SEC/Fed/ECB/Treasury/ETF/exchange/major
-    crypto company), per the required signal list. Used to REPLACE the
-    allow-by-default behaviour for non-official sources.
+    crypto company) — all evaluated on the TITLE ONLY (RC-α fix).
     """
     if _has_hard_news_signal(item):
         return True
-    return _matches(_text_of(item), _TIER1_RE, _TIER1_SYM)
+    return _matches((item.title or "").lower(), _TIER1_RE, _TIER1_SYM)
+
+
+# === URL section firewall =================================================
+# Deterministic substring blocklist over item.link. Crypto/markets outlets
+# encode the section in the URL path (CoinDesk /learn/, Decrypt /learn/,
+# CoinTelegraph /analysis/, Investing /analysis/, …). Dropping by section is
+# immune to summary contamination. Configurable — extend as feed logs reveal
+# new sections. Verify against real "Poll #N sample <src>" link logs.
+NOISE_URL_SECTIONS = (
+    "/learn/", "/education/", "/academy/", "/guide/", "/guides/",
+    "/explainer/", "/explained/", "/analysis/", "/price-analysis/",
+    "/opinion/", "/opinions/", "/editorial/", "/commentary/",
+    "/research/", "/deep-dive/", "/podcast/", "/newsletter/",
+)
+
+
+def is_noise_url(item: NewsItem) -> bool:
+    """True if the article URL is in a non-news section (Learn/Opinion/…)."""
+    link = (item.link or "").lower()
+    return any(section in link for section in NOISE_URL_SECTIONS)
 
 
 # Retrospective-explanation verbs ("why X happened / what caused Y" content).
@@ -654,13 +679,25 @@ def is_invalid_noise(item: NewsItem) -> bool:
       D) question-style titles (speculation / explainer / clickbait);
       E) ZeroHedge items missing a current anchor, carrying a past year,
          or carrying any historical phrase.
+      U) URL section (Learn/Opinion/Analysis/…) — non-official only.
 
+    Official sources (SEC/Fed/ECB) are exempt from the question (D) and
+    historical-year (A) rules — a regulator headline may legitimately ask a
+    question or cite an old year — but still pass every other check.
     Genuine upcoming-speech announcements bypass the firewall via
     ``is_upcoming_speech`` so user-required pre-event warnings still pass.
     """
     # Hard exception: real upcoming speeches always survive.
     if is_upcoming_speech(item):
         return False
+
+    official = item.official
+
+    # U) URL section firewall — Learn/Opinion/Analysis/etc. (non-official:
+    #    regulator URLs never carry these sections, and a rare official
+    #    /research/ note should not be silently dropped).
+    if not official and is_noise_url(item):
+        return True
 
     title = item.title or ""
     text = f"{title} {item.summary}"
@@ -669,7 +706,8 @@ def is_invalid_noise(item: NewsItem) -> bool:
     has_current = bool(_CURRENT_FUTURE_RE.search(text))
 
     # A) Historical content (year reference with no current/future anchor).
-    if has_year and not has_current:
+    #    Skipped for official sources (a Fed release may cite 2008/2020).
+    if not official and has_year and not has_current:
         return True
 
     # B) Commentary / opinion / analysis / explainer / retrospective phrases.
@@ -683,8 +721,10 @@ def is_invalid_noise(item: NewsItem) -> bool:
         return True
 
     # D) Question / clickbait titles (structural): opens with an interrogative
-    #    word and has no hard news signal -> speculation / explainer.
-    if _QUESTION_START_RE.match(title) and not _has_hard_news_signal(item):
+    #    word and has no hard news signal -> speculation / explainer. Skipped
+    #    for official sources (a regulator may legitimately ask a question).
+    if (not official and _QUESTION_START_RE.match(title)
+            and not _has_hard_news_signal(item)):
         return True
 
     # E) ZeroHedge: extra scrutiny. Drop if any of:
