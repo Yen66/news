@@ -207,7 +207,9 @@ def test_load_real_calendar_file():
     cal = EventCalendar.load("src/events/calendar.yaml")
     assert cal.events, "shipped calendar should parse and be non-empty"
     types = {e.type for e in cal.events}
-    assert {"cpi", "fomc", "nfp", "sec_etf", "ecb", "boj"} <= types
+    # Production calendar carries only verified event families (BOJ excluded —
+    # no official decision time; SEC ETF excluded — no confirmed deadline).
+    assert {"cpi", "fomc", "nfp", "ecb"} <= types
     # Every shipped event is valid and UTC-aware.
     for e in cal.events:
         assert e.scheduled_utc.tzinfo is timezone.utc
