@@ -1,83 +1,126 @@
 # =============================================================================
 # CMW_News — pre-event alert calendar (SOURCE OF TRUTH)
 # =============================================================================
-# Hand-curated. Refresh quarterly — every event below is published months ahead
-# by its authority (Fed/ECB/BOJ calendars, BLS release schedule, SEC deadlines).
+# !!! STAGING — DATES UNVERIFIED. DO NOT set ENABLE_PRE_EVENT_ALERTS=true until
+# !!! every `time:` below is confirmed against the official schedule linked on
+# !!! its row. These were prepared without live access to the authorities'
+# !!! pages (their sites block automated fetches), so treat each as a best-
+# !!! effort draft to CHECK, not to trust. A wrong time = an alert at the wrong
+# !!! moment, which is the exact failure this system must avoid.
+# =============================================================================
+# Schema:
+#   type/title/time/tz/importance required; offsets/consensus/source_url/status
+#   optional. time is local "YYYY-MM-DD HH:MM"; tz is an IANA name.
+#   CRITICAL -> 24h+1h · STANDARD -> 1h · SPECIAL -> 1h (manual-only)
 #
-# Each entry:
-#   type:       stable slug (used in the deterministic event_id). Keep unique.
-#   title:      short Russian label shown in the alert.
-#   time:       local clock time, "YYYY-MM-DD HH:MM" (24h).
-#   tz:         IANA timezone (e.g. America/New_York) or "UTC". DST handled.
-#   importance: critical (24h+1h) | standard (1h) | special (manual-only, 1h)
-#   offsets:    OPTIONAL override, e.g. ["1h"]. Omit to use the tier default.
-#   consensus:  OPTIONAL forecast string, shown in the 24h alert.
-#   source_url: OPTIONAL link to the authority's schedule.
-#   status:     OPTIONAL "scheduled" (default) | "cancelled".
+# Confidence (see chat for the full table):
+#   FOMC  decision days verified to fall on Wednesdays + standard pattern — MEDIUM
+#   NFP   first-Friday rule (Jul 3 / Aug 7 / Sep 4 2026)                  — MEDIUM
+#   ECB   Thursday pattern, exact dates unconfirmed                       — LOW
+#   BOJ   2-day MPM, no fixed announce time (12:00 JST assumed)           — LOW
+#   CPI   exact mid-month day varies (Tue/Wed/Thu) — HIGHEST verify need  — LOW
 #
-# Alert design:
-#   CRITICAL  -> FOMC, CPI, NFP, SEC ETF decisions   (24h + 1h)
-#   STANDARD  -> ECB, BOJ                             (1h)
-#   SPECIAL   -> Jackson Hole, Powell testimony, major SEC hearings,
-#                pre-announced major Trump speeches   (1h, ADD MANUALLY)
-#
-# NOTE: dates below are ILLUSTRATIVE placeholders — replace with the real
-# published schedule before enabling ENABLE_PRE_EVENT_ALERTS.
+# SEC ETF and SPECIAL (Jackson Hole) entries REMOVED — no confirmed date.
+# Scope: ~one quarter ahead (refresh quarterly). Today is 2026-06-09.
 # =============================================================================
 
-# --- CRITICAL (24h + 1h) -----------------------------------------------------
-- type: cpi
-  title: "Инфляция в США (CPI)"
-  time: "2026-06-11 08:30"
+# --- CRITICAL: FOMC (24h + 1h) · decision 14:00 ET, presser 14:30 ET ---------
+# VERIFY: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+- type: fomc
+  title: "Решение ФРС по ставке + пресс-конференция Пауэлла"
+  time: "2026-06-17 14:00"   # VERIFY (Wed)
   tz: "America/New_York"
   importance: critical
-  consensus: "ожидается 3,2% г/г"
-  source_url: "https://www.bls.gov/schedule/news_release/cpi.htm"
+  source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
 - type: fomc
   title: "Решение ФРС по ставке + пресс-конференция Пауэлла"
-  time: "2026-06-17 14:00"
+  time: "2026-07-29 14:00"   # VERIFY (Wed)
   tz: "America/New_York"
   importance: critical
-  consensus: "рынок ждёт сохранения ставки"
   source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
 
+- type: fomc
+  title: "Решение ФРС по ставке + пресс-конференция Пауэлла"
+  time: "2026-09-16 14:00"   # VERIFY (Wed)
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+
+# --- CRITICAL: CPI (24h + 1h) · 08:30 ET · LOW confidence on exact day --------
+# VERIFY EACH: https://www.bls.gov/schedule/news_release/cpi.htm
+- type: cpi
+  title: "Инфляция в США (CPI)"
+  time: "2026-07-14 08:30"   # VERIFY — exact day varies mid-month
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+- type: cpi
+  title: "Инфляция в США (CPI)"
+  time: "2026-08-12 08:30"   # VERIFY — exact day varies mid-month
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+- type: cpi
+  title: "Инфляция в США (CPI)"
+  time: "2026-09-11 08:30"   # VERIFY — exact day varies mid-month
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.bls.gov/schedule/news_release/cpi.htm"
+
+# --- CRITICAL: NFP / Employment Situation (24h + 1h) · 08:30 ET ---------------
+# VERIFY EACH: https://www.bls.gov/schedule/news_release/empsit.htm
 - type: nfp
   title: "Отчёт по занятости в США (NFP + безработица)"
-  time: "2026-07-03 08:30"
+  time: "2026-07-03 08:30"   # VERIFY (first Friday)
   tz: "America/New_York"
   importance: critical
   source_url: "https://www.bls.gov/schedule/news_release/empsit.htm"
 
-- type: sec_etf
-  title: "Дедлайн SEC по заявке на спотовый ETF"
-  time: "2026-07-15 12:00"
+- type: nfp
+  title: "Отчёт по занятости в США (NFP + безработица)"
+  time: "2026-08-07 08:30"   # VERIFY (first Friday)
   tz: "America/New_York"
   importance: critical
-  source_url: "https://www.sec.gov/"
+  source_url: "https://www.bls.gov/schedule/news_release/empsit.htm"
 
-# --- STANDARD (1h) -----------------------------------------------------------
+- type: nfp
+  title: "Отчёт по занятости в США (NFP + безработица)"
+  time: "2026-09-04 08:30"   # VERIFY (first Friday)
+  tz: "America/New_York"
+  importance: critical
+  source_url: "https://www.bls.gov/schedule/news_release/empsit.htm"
+
+# --- STANDARD: ECB rate decision (1h) · 14:15 CET, presser 14:45 -------------
+# VERIFY: https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html
 - type: ecb
   title: "Решение ЕЦБ по ставке"
-  time: "2026-07-16 14:15"
+  time: "2026-07-23 14:15"   # VERIFY (Thu)
   tz: "Europe/Berlin"
   importance: standard
-  source_url: "https://www.ecb.europa.eu/"
+  source_url: "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"
+
+- type: ecb
+  title: "Решение ЕЦБ по ставке"
+  time: "2026-09-10 14:15"   # VERIFY (Thu)
+  tz: "Europe/Berlin"
+  importance: standard
+  source_url: "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"
+
+# --- STANDARD: BOJ rate decision (1h) · no fixed time (~12:00 JST assumed) ----
+# VERIFY: https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm
+- type: boj
+  title: "Решение Банка Японии по ставке"
+  time: "2026-07-29 12:00"   # VERIFY — date AND time (BOJ has no fixed slot)
+  tz: "Asia/Tokyo"
+  importance: standard
+  source_url: "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
 
 - type: boj
   title: "Решение Банка Японии по ставке"
-  time: "2026-07-31 12:00"
+  time: "2026-09-18 12:00"   # VERIFY — date AND time (BOJ has no fixed slot)
   tz: "Asia/Tokyo"
   importance: standard
-  source_url: "https://www.boj.or.jp/en/"
-
-# --- SPECIAL (manual-only, 1h) ----------------------------------------------
-# Add ONLY when a rare, genuinely market-moving event is pre-announced.
-# Inclusion test: would a flat trader want to be at the screen? scheduled
-# >=1h out? not already a recurring entry? -> all yes -> add.
-- type: jackson_hole
-  title: "Симпозиум в Джексон-Хоул: речь Пауэлла"
-  time: "2026-08-21 10:00"
-  tz: "America/Denver"
-  importance: special
-  source_url: "https://www.kansascityfed.org/"
+  source_url: "https://www.boj.or.jp/en/mopo/mpmsche_minu/index.htm"
