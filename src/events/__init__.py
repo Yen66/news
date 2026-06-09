@@ -12,6 +12,8 @@ from .models import (
     OFFSET_TIMEDELTAS,
 )
 from .calendar import CalendarError, EventCalendar
+from .formatter import format_alert
+from .scheduler import PreEventScheduler
 
 __all__ = [
     "AlertDue",
@@ -21,4 +23,6 @@ __all__ = [
     "OFFSET_TIMEDELTAS",
     "CalendarError",
     "EventCalendar",
+    "PreEventScheduler",
+    "format_alert",
 ]

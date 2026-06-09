@@ -61,7 +61,8 @@ class Event:
 
     ``scheduled_utc`` is always a timezone-aware UTC datetime (the loader
     converts from local time + IANA tz). ``type`` is a stable slug used in
-    the deterministic ``event_id``.
+    the deterministic ``event_id``. ``tz_name`` is the IANA name we
+    converted from, kept so alerts can render the event-local time.
     """
 
     type: str
@@ -69,6 +70,7 @@ class Event:
     scheduled_utc: datetime
     importance: Importance
     offsets: tuple[str, ...]
+    tz_name: str = "UTC"
     source_url: str = ""
     consensus: str = ""
     status: str = "scheduled"

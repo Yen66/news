@@ -128,6 +128,7 @@ def _build_event(raw: dict, index: int) -> Event:
         scheduled_utc=scheduled_utc,
         importance=importance,
         offsets=offsets,
+        tz_name=tz_str,
         source_url=str(raw.get("source_url", "")).strip(),
         consensus=str(raw.get("consensus", "")).strip(),
         status=status,

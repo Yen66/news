@@ -22,6 +22,7 @@ from .ai.factory import build_ai_client
 from .ai.writer import PostWriter
 from .config import Config
 from .db.repository import build_repository
+from .events import CalendarError, EventCalendar, PreEventScheduler
 from .pipeline.dedup import Deduplicator
 from .pipeline.story import StoryDeduplicator
 from .pipeline.filters import (
@@ -71,13 +72,49 @@ class NewsBotApp:
         self._published_total = 0
         self._poll_count = 0
 
+        # Pre-event alert subsystem. Gated on the feature flag — if it's
+        # off, the calendar is NOT loaded and the scheduler is NOT created,
+        # so a misconfigured YAML cannot affect the news pipeline.
+        self._pre_event_scheduler: Optional[PreEventScheduler] = None
+        if config.enable_pre_event_alerts:
+            self._init_pre_event_scheduler()
+
+    def _init_pre_event_scheduler(self) -> None:
+        from datetime import timedelta
+
+        try:
+            calendar = EventCalendar.load(
+                self._config.pre_event_calendar_path
+            )
+        except CalendarError as exc:
+            # A bad calendar must not crash startup — disable the subsystem
+            # loudly and keep the news pipeline running.
+            log.error(
+                "Pre-event calendar failed validation, alerts DISABLED: %s",
+                exc,
+            )
+            return
+        self._pre_event_scheduler = PreEventScheduler(
+            calendar,
+            self._repo,
+            self._telegram,
+            grace=timedelta(minutes=self._config.pre_event_grace_minutes),
+            admin_alerter=self._safe_alert,
+        )
+        log.info(
+            "Pre-event alerts ENABLED: %d event(s), grace=%dmin, tick=%ds",
+            len(calendar.events),
+            self._config.pre_event_grace_minutes,
+            self._config.pre_event_tick_seconds,
+        )
+
     # --- status for /health -------------------------------------------------
     def status(self) -> dict:
         poller_alive = (
             time.time() - self._last_poll_ts
             < max(120, self._config.poll_interval_seconds * 4)
         )
-        return {
+        out = {
             "poller_alive": poller_alive,
             "queue_size": self._queue.size,
             "seen_ids": self._dedup.size,
@@ -88,6 +125,9 @@ class NewsBotApp:
             "providers": self._ai.provider_names,
             "sources": [s.id for s in self._sources],
         }
+        if self._pre_event_scheduler is not None:
+            out["pre_event_alerts"] = self._pre_event_scheduler.status()
+        return out
 
     # --- diagnostics --------------------------------------------------------
     async def test_post(self) -> dict:
@@ -364,6 +404,33 @@ class NewsBotApp:
                 len(raw),
             )
 
+    async def _pre_event_loop(self) -> None:
+        """Tick the pre-event scheduler every PRE_EVENT_TICK_SECONDS.
+
+        Failures inside one tick never kill the loop — they are logged
+        and the next tick still runs while inside the grace window.
+        """
+        assert self._pre_event_scheduler is not None
+        interval = self._config.pre_event_tick_seconds
+        log.info("Pre-event scheduler task started (interval=%ds)", interval)
+        try:
+            await self._pre_event_scheduler.hydrate()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("Pre-event hydrate failed; alerts disabled.")
+            await self._safe_alert(f"Pre-event hydrate failed: {exc}")
+            return
+        while not self._stopping.is_set():
+            try:
+                await self._pre_event_scheduler.tick()
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                log.exception("Pre-event tick failed")
+                await self._safe_alert(f"Pre-event tick failed: {exc}")
+            try:
+                await asyncio.wait_for(self._stopping.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+        log.info("Pre-event scheduler task stopped.")
+
     async def _consume_loop(self) -> None:
         log.info("Consumer task started.")
         while not self._stopping.is_set():
@@ -408,6 +475,10 @@ class NewsBotApp:
             asyncio.create_task(self._poll_loop(), name="poller"),
             asyncio.create_task(self._consume_loop(), name="consumer"),
         ]
+        if self._pre_event_scheduler is not None:
+            self._tasks.append(
+                asyncio.create_task(self._pre_event_loop(), name="pre-event")
+            )
         for task in self._tasks:
             task.add_done_callback(self._supervise)
         log.info("Background tasks created: %s",
