@@ -510,9 +510,14 @@ def should_publish(item: NewsItem) -> bool:
 
 
 # === Strict data-quality firewall =========================================
-# A deterministic pre-filter that drops historical / commentary / non-news
-# content BEFORE any other logic. Strict by design: false positives are
-# preferred over letting noise through.
+# A deterministic pre-filter that drops historical / retrospective / opinion
+# / commentary / explainer / non-news content BEFORE any other logic
+# (keyword gate, scoring, AI writing). Strict by design: false positives
+# are preferred over letting noise through.
+#
+# The ONLY built-in exception is genuine upcoming-speech announcements
+# (Trump/Powell/Lagarde/...). Those bypass the firewall at the very top so
+# the user-required "warn before market-moving appearances" path stays open.
 
 # Any year 2010–2025 (the CURRENT/future year, e.g. 2026, is intentionally
 # NOT matched, so genuine current-year news is never flagged historical).
@@ -520,18 +525,72 @@ _NOISE_YEAR_RE = re.compile(r"\b20(?:1[0-9]|2[0-5])\b")
 
 # Wording that clearly anchors an item to a current/imminent event.
 _CURRENT_FUTURE_RE = re.compile(
-    r"\b(?:today|now|breaking|upcoming|will|tonight|this\s+(?:morning|"
-    r"afternoon|evening|week)|tomorrow|сегодня|сейчас|завтра)\b",
+    r"\b(?:today|now|breaking|just\s+(?:announced|in|hit|crossed|posted)|"
+    r"upcoming|tonight|tomorrow|this\s+(?:morning|afternoon|evening|week)|"
+    r"will|сегодня|сейчас|завтра)\b",
     re.IGNORECASE,
 )
 
-# Commentary / opinion / blog markers (substring, case-insensitive).
+# Commentary / opinion / analysis / explainer / retrospective / non-news
+# markers — substring match in title+body, case-insensitive. Deliberately
+# broad: each phrase is a strong signal the content is NOT a current event.
 _COMMENTARY_NOISE_PHRASES = (
-    "according to", "experts say", "analysts say", "some say",
-    "believe that", "opinion", "analysis", "op-ed", "blog", "thread",
+    # --- "According to" sourcing ----------------------------------------
+    "according to",
+    # --- "X say/believe/think" sourcing-to-opinion frames ---------------
+    "experts say", "experts said", "experts believe", "experts think",
+    "analysts say", "analysts said", "analysts believe", "analysts think",
+    "some say", "some believe", "some think",
+    "many say", "many believe", "many think",
+    "traders say", "investors say", "sources say",
+    "we believe", "we think", "we expect", "we see",
+    "they believe", "they think",
+    # --- Generic opinion framing ----------------------------------------
+    "in my opinion", "in our opinion", "my view", "our view",
+    "believe that", "thinks that",
+    # --- Opinion / analysis labels --------------------------------------
+    "opinion", "op-ed", "analysis", "commentary", "perspective",
+    "editorial",
+    # --- Non-news format markers ----------------------------------------
+    "blog", "thread", "podcast", "newsletter", "deep dive",
+    # --- Retrospective / year-independent -------------------------------
+    "looking back", "look back", "year in review", "year-in-review",
+    "year-end review", "decade in review", "in retrospect", "retrospective",
+    "remember when", "remember the",
+    "what happened to", "where are they now",
+    "the rise and fall", "the story of", "the history of",
+    "this day in history", "on this day",
+    # --- Explainer / educational / preview-list framing -----------------
+    "explainer", "explained", "demystified", "decoded",
+    "guide to", "beginner's guide", "beginner guide",
+    "primer on", "understanding the",
+    "everything you need to know", "all you need to know",
+    "what to know about", "things to know about", "things to watch",
 )
 
-# Retrospective-explanation verbs ("why X happened" content).
+# Question-style title patterns — speculation / explainer / clickbait.
+# Anchored to the start of the title so "today's CPI is hot" doesn't trip
+# the "is " match while "Is the Fed pivoting" does.
+_QUESTION_TITLE_RE = re.compile(
+    r"^\s*(?:"
+    r"what\s+(?:is|are|does|do|did|will|happened|caused|causes|makes)"
+    r"|how\s+(?:to|do|does|did|will|can|much|many)"
+    r"|why\s+(?:is|are|did|do|does|will|the)"
+    r"|where\s+(?:is|are|did|do|does|will|to)"
+    r"|when\s+(?:will|did|do|does)"
+    r"|is\s+(?:the|this|that|it|bitcoin|btc|ethereum|crypto)\s"
+    r"|are\s+(?:we|the|investors|traders|stocks)"
+    r"|will\s+(?:bitcoin|btc|ethereum|eth|the\s+fed|the\s+ecb|gold|"
+    r"stocks|trump|powell)"
+    r"|should\s+(?:you|we|i|investors)"
+    r"|could\s+(?:bitcoin|btc|ethereum|eth|this|the)"
+    r"|would\s+(?:bitcoin|btc|ethereum)"
+    r"|does\s+(?:bitcoin|btc|ethereum|the\s+fed)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Retrospective-explanation verbs ("why X happened / what caused Y" content).
 _RETRO_EXPLAIN_RE = re.compile(
     r"\b(?:caused|causing|explains?|explained|blamed?|"
     r"here'?s\s+why|reason\s+why|what\s+happened|looking\s+back)\b",
@@ -547,38 +606,59 @@ _CRYPTO_SUBJECT_RE = re.compile(
 def is_invalid_noise(item: NewsItem) -> bool:
     """Strict data-quality firewall. True => drop the item outright.
 
-    Blocks (any one is sufficient):
-      A) historical content — a 2010–2025 year with no current/future anchor;
-      B) commentary / opinion / blog / analysis phrasing;
-      C) retrospective crypto post-mortems ("why BTC crashed", incl. years);
-      D) ZeroHedge items with any historical framing.
-    Deterministic; runs before everything else in ``filter_items``.
+    Runs before everything else in ``filter_items``. Blocks (any one is
+    sufficient):
+
+      A) historical content — a 2010-2025 year with no current/future anchor;
+      B) commentary / opinion / blog / analysis / explainer / retrospective
+         phrasing (substring match in title+body);
+      C) retrospective crypto post-mortems (explanation verbs + year or
+         crypto subject);
+      D) question-style titles (speculation / explainer / clickbait);
+      E) ZeroHedge items missing a current anchor, carrying a past year,
+         or carrying any historical phrase.
+
+    Genuine upcoming-speech announcements bypass the firewall via
+    ``is_upcoming_speech`` so user-required pre-event warnings still pass.
     """
-    text = f"{item.title} {item.summary}"
+    # Hard exception: real upcoming speeches always survive.
+    if is_upcoming_speech(item):
+        return False
+
+    title = item.title or ""
+    text = f"{title} {item.summary}"
     low = text.lower()
     has_year = bool(_NOISE_YEAR_RE.search(text))
     has_current = bool(_CURRENT_FUTURE_RE.search(text))
 
-    # A) Historical content.
+    # A) Historical content (year reference with no current/future anchor).
     if has_year and not has_current:
         return True
 
-    # B) Commentary / opinion / blog.
+    # B) Commentary / opinion / analysis / explainer / retrospective phrases.
     if any(phrase in low for phrase in _COMMENTARY_NOISE_PHRASES):
         return True
 
-    # C) Retrospective crypto noise: explanation verbs, especially with a year
-    #    or a crypto subject; an old year + explanation is always retrospective.
-    has_explain = bool(_RETRO_EXPLAIN_RE.search(text))
-    if has_explain and (has_year or _CRYPTO_SUBJECT_RE.search(text)):
-        return True
-
-    # D) ZeroHedge low-quality retrospectives: any historical framing → drop.
-    src = f"{item.source_id} {item.source_name}".lower()
-    if "zerohedge" in src and (
-        has_year or any(p.search(text) for p in _HISTORICAL_PHRASES)
+    # C) Retrospective crypto noise.
+    if _RETRO_EXPLAIN_RE.search(text) and (
+        has_year or _CRYPTO_SUBJECT_RE.search(text)
     ):
         return True
+
+    # D) Question-style titles.
+    if _QUESTION_TITLE_RE.search(title):
+        return True
+
+    # E) ZeroHedge: extra scrutiny. Drop if any of:
+    #    - any past year present,
+    #    - no current/imminent anchor at all,
+    #    - any historical phrase.
+    src = f"{item.source_id} {item.source_name}".lower()
+    if "zerohedge" in src:
+        if has_year or not has_current:
+            return True
+        if any(p.search(text) for p in _HISTORICAL_PHRASES):
+            return True
 
     return False
 
