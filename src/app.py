@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import secrets
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -492,7 +494,23 @@ class NewsBotApp:
         log.info("Background tasks created: %s",
                  [t.get_name() for t in self._tasks])
 
-        app = build_app(self.status, test_post=self.test_post)
+        # /test-post publishes a real post to the production channel, so it
+        # must NOT be reachable anonymously. Require an admin secret via
+        # TEST_POST_SECRET; if unset, fall back to a per-process random token
+        # that effectively disables the endpoint (501-style: cannot be hit
+        # without the operator knowing the secret in advance).
+        test_post_secret = os.environ.get("TEST_POST_SECRET", "").strip()
+        if not test_post_secret:
+            test_post_secret = secrets.token_urlsafe(32)
+            log.warning(
+                "TEST_POST_SECRET not set; /test-post effectively disabled "
+                "until a secret is configured in the environment."
+            )
+        app = build_app(
+            self.status,
+            test_post=self.test_post,
+            test_post_secret=test_post_secret,
+        )
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, host="0.0.0.0", port=self._config.http_port)

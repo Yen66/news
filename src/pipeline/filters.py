@@ -157,6 +157,17 @@ _ROUTINE_PHRASES = [
     re.compile(r"\bmarket\s+recap\b", re.I),
     re.compile(r"\bstocks?\s+(?:end|close[ds]?|finish)\s+(?:mixed|flat|higher|lower)\b", re.I),
     re.compile(r"\bwall\s+street\s+(?:wrap|recap)\b", re.I),
+    # Index-name closing-wrap: "S&P 500 closes mixed", "Nasdaq ends higher",
+    # "Dow finishes flat". Same shape as the stocks-end-mixed pattern, but
+    # matches the major index keywords explicitly (the bare "S&P 500" hits
+    # the tier-1 boost so it cleared the impact floor without this guard).
+    re.compile(
+        r"\b(?:s&p\s*500|sp\s*500|s&p500|nasdaq|dow|dow\s+jones|"
+        r"ftse|dax|nikkei|hang\s+seng|stoxx|cac)\s+"
+        r"(?:end[s]?|ended|close[ds]?|closed|finish(?:e[ds])?)\s+"
+        r"(?:mixed|flat|higher|lower|up|down)\b",
+        re.I,
+    ),
 ]
 # A bare "X up/down 0.4%" move with no other signal.
 _MOVE_RE = re.compile(
@@ -531,9 +542,28 @@ def should_publish(item: NewsItem) -> bool:
 # (Trump/Powell/Lagarde/...). Those bypass the firewall at the very top so
 # the user-required "warn before market-moving appearances" path stays open.
 
-# Any year 2010–2025 (the CURRENT/future year, e.g. 2026, is intentionally
-# NOT matched, so genuine current-year news is never flagged historical).
-_NOISE_YEAR_RE = re.compile(r"\b20(?:1[0-9]|2[0-5])\b")
+# Years considered "past" for the historical-content gate. Built dynamically
+# from the current year so the regex never goes stale at year boundaries:
+# the upper bound is ``current_year - 1`` so 2026/2027 etc. are NEVER flagged
+# historical (they're current or future). Cached per year.
+_NOISE_YEAR_CACHE: dict[int, re.Pattern] = {}
+
+
+def _noise_year_re() -> re.Pattern:
+    """Regex matching past years (2010 .. current_year-1), refreshed yearly."""
+    year = _current_year()
+    cached = _NOISE_YEAR_CACHE.get(year)
+    if cached is not None:
+        return cached
+    upper = year - 1
+    if upper < 2010:
+        # Defensive: clock skew / off-year fallback.
+        pattern = re.compile(r"(?!x)x")  # never matches
+    else:
+        years = "|".join(str(y) for y in range(2010, upper + 1))
+        pattern = re.compile(rf"\b(?:{years})\b")
+    _NOISE_YEAR_CACHE[year] = pattern
+    return pattern
 
 # Wording that clearly anchors an item to a current/imminent event.
 _CURRENT_FUTURE_RE = re.compile(
@@ -681,29 +711,42 @@ def is_invalid_noise(item: NewsItem) -> bool:
          or carrying any historical phrase.
       U) URL section (Learn/Opinion/Analysis/…) — non-official only.
 
-    Official sources (SEC/Fed/ECB) are exempt from the question (D) and
-    historical-year (A) rules — a regulator headline may legitimately ask a
-    question or cite an old year — but still pass every other check.
-    Genuine upcoming-speech announcements bypass the firewall via
-    ``is_upcoming_speech`` so user-required pre-event warnings still pass.
+    Official sources (SEC/Fed/ECB) are exempt from the question (D),
+    historical-year (A) and commentary-phrase (B) rules — a regulator
+    headline may legitimately ask a question, cite an old year, or use
+    "analysis/opinion/according to" colloquially — but still pass every
+    other check. Genuine upcoming-speech announcements bypass relevance
+    gates via ``is_upcoming_speech`` so user-required pre-event warnings
+    still pass, BUT they cannot bypass the URL-section firewall: a
+    ``/learn/`` or ``/analysis/`` URL whose body happens to mention an
+    upcoming Powell speech is still a non-news explainer and is dropped.
     """
-    # Hard exception: real upcoming speeches always survive.
-    if is_upcoming_speech(item):
-        return False
-
     official = item.official
 
-    # U) URL section firewall — Learn/Opinion/Analysis/etc. (non-official:
-    #    regulator URLs never carry these sections, and a rare official
+    # U) URL section firewall — Learn/Opinion/Analysis/etc. Runs BEFORE the
+    #    speech bypass so an explainer URL cannot be rescued by a stray
+    #    speech-intent phrase in its body. Skipped for official sources
+    #    (regulator URLs never carry these sections, and a rare official
     #    /research/ note should not be silently dropped).
     if not official and is_noise_url(item):
         return True
 
+    # Hard exception: real upcoming speeches always survive (post-URL).
+    if is_upcoming_speech(item):
+        return False
+
     title = item.title or ""
     text = f"{title} {item.summary}"
-    low = text.lower()
-    has_year = bool(_NOISE_YEAR_RE.search(text))
-    has_current = bool(_CURRENT_FUTURE_RE.search(text))
+    low_title = title.lower()
+    has_year = bool(_noise_year_re().search(text))
+    # An item is "current-anchored" if it carries a future/imminent phrase OR
+    # the current year string itself appears (F11: legitimate current-day news
+    # that compares to 2020/2021 should not be flagged historical just because
+    # it cites a past year, when the text also names the current year).
+    has_current = (
+        bool(_CURRENT_FUTURE_RE.search(text))
+        or str(_current_year()) in text
+    )
 
     # A) Historical content (year reference with no current/future anchor).
     #    Skipped for official sources (a Fed release may cite 2008/2020).
@@ -711,7 +754,13 @@ def is_invalid_noise(item: NewsItem) -> bool:
         return True
 
     # B) Commentary / opinion / analysis / explainer / retrospective phrases.
-    if any(phrase in low for phrase in _COMMENTARY_NOISE_PHRASES):
+    #    Title-only check (F1): an "analysis" / "according to" / "we expect"
+    #    inside a news body is normal wire-copy phrasing and must NOT block
+    #    legitimate breaking news. Officials are exempt — a regulator press
+    #    release may use these words descriptively.
+    if not official and any(
+        phrase in low_title for phrase in _COMMENTARY_NOISE_PHRASES
+    ):
         return True
 
     # C) Retrospective crypto noise.
@@ -728,7 +777,7 @@ def is_invalid_noise(item: NewsItem) -> bool:
         return True
 
     # E) ZeroHedge: extra scrutiny. Drop if any of:
-    #    - any past year present,
+    #    - any past year present (per dynamic _noise_year_re),
     #    - no current/imminent anchor at all,
     #    - any historical phrase.
     src = f"{item.source_id} {item.source_name}".lower()
@@ -770,6 +819,17 @@ def filter_items(
             tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
             catalysts = _count_distinct(text, _CATALYST_RE, _CATALYST_SYM)
             if tier1 == 0 and catalysts == 0:
+                continue
+            # F3: hard reject for routine recap / preview headlines
+            # ("Week ahead: …", "Market wrap", "Wall Street recap",
+            # "Stocks end mixed") even when they happen to name a tier-1
+            # keyword. A genuine event hiding inside a wrap-style headline
+            # is rescued by a catalyst verb in the same text.
+            wrap_text = f"{item.title} {item.summary}"
+            if (
+                any(p.search(wrap_text) for p in _ROUTINE_PHRASES)
+                and catalysts == 0
+            ):
                 continue
         if item.impact < min_impact and not item.official and not speech:
             continue

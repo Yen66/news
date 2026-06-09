@@ -6,6 +6,7 @@ of the background polling task.
 """
 from __future__ import annotations
 
+import hmac
 import time
 from typing import Awaitable, Callable, Optional
 
@@ -17,6 +18,7 @@ TestPost = Callable[[], Awaitable[dict]]
 def build_app(
     status_provider: Callable[[], dict],
     test_post: Optional[TestPost] = None,
+    test_post_secret: Optional[str] = None,
 ) -> web.Application:
     started = time.time()
 
@@ -37,12 +39,28 @@ def build_app(
             status=200 if healthy else 503,
         )
 
-    async def test_post_handler(_request: web.Request) -> web.Response:
+    async def test_post_handler(request: web.Request) -> web.Response:
         if test_post is None:
             return web.json_response(
                 {"status": "error", "error": "test-post not available"},
                 status=503,
             )
+        # Optional admin secret — when set, the endpoint requires a matching
+        # ``X-Test-Post-Secret`` header or ``?token=`` query param. Compared
+        # with hmac.compare_digest to avoid timing leaks. ``None`` (the test
+        # default) leaves the endpoint open as before.
+        if test_post_secret is not None:
+            provided = (
+                request.headers.get("X-Test-Post-Secret", "")
+                or request.query.get("token", "")
+            )
+            if not provided or not hmac.compare_digest(
+                provided, test_post_secret
+            ):
+                return web.json_response(
+                    {"status": "error", "error": "unauthorized"},
+                    status=401,
+                )
         try:
             result = await test_post()
             ok = result.get("published") is True
