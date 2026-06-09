@@ -209,6 +209,51 @@ INFLUENTIAL_AUTHORS = {
     "federal reserve", "ecb", "imf", "sec chair", "treasury secretary",
 }
 
+# === Upcoming-speech detection ============================================
+# Market-moving figures whose SCHEDULED appearances we want to warn about
+# before they happen. INFLUENTIAL_AUTHORS above (Powell/Lagarde/Yellen/...)
+# count too — this set adds principals not already there.
+SPEECH_FIGURES = {
+    "trump", "bessent", "lutnick", "kashkari", "waller", "williams",
+    "daly", "bostic", "goolsbee", "barr", "cook", "jefferson", "ueda",
+    "centeno", "villeroy", "nagel", "de guindos", "schnabel",
+    "treasury secretary", "commerce secretary", "fed chair",
+    "ecb president", "sec chair", "sec chairman",
+    # Cyrillic aliases (feeds/posts may use Russian spellings).
+    "трамп", "пауэлл", "лагард", "йеллен", "бессент", "лютник",
+    "гензлер", "уэда",
+}
+# Language announcing an UPCOMING appearance (case-insensitive).
+SPEECH_INTENT_RE = re.compile(
+    r"\b(?:"
+    r"to\s+(?:speak|address|testify|deliver(?:\s+remarks)?)"
+    r"|will\s+(?:speak|address|testify|deliver)"
+    r"|(?:is|are)\s+(?:scheduled|expected|set)\s+to\s+"
+    r"(?:speak|address|testify|deliver|hold)"
+    r"|scheduled\s+(?:speech|remarks|address|testimony|press\s+conference|"
+    r"hearing|appearance)"
+    r"|(?:senate|house|congressional|confirmation)\s+(?:hearing|testimony)"
+    r"|upcoming\s+(?:speech|address|remarks|appearance|hearing|testimony)"
+    r"|press\s+conference\s+(?:today|tomorrow|on)"
+    r"|выступит|выступление|пресс[-\s]конференци|слушани"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Past-tense / already-happened markers — used as a title-only guard to drop
+# recaps ("Powell spoke yesterday", "Trump addressed reporters").
+_SPEECH_PAST_TENSE_RE = re.compile(
+    r"\b(?:spoke|addressed|testified|delivered|told\s+reporters|"
+    r"said\s+(?:earlier|on|that)|выступил)\b",
+    re.IGNORECASE,
+)
+# Words that re-assert a future framing even alongside a past-tense token.
+_SPEECH_FUTURE_HINT_RE = re.compile(
+    r"\b(?:will|to\s+\w+|scheduled|expected|upcoming|today|tomorrow|"
+    r"завтра|сегодня)\b",
+    re.IGNORECASE,
+)
+
 # Minimum impact score an item must reach to be published. Tunable via
 # MIN_IMPACT_TO_PUBLISH; the default trades volume for signal.
 DEFAULT_MIN_IMPACT = 45
@@ -252,6 +297,32 @@ _RELEVANT_RE, _RELEVANT_SYM = _build_keyword_matcher(RELEVANT_KEYWORDS)
 _CATALYST_RE, _CATALYST_SYM = _build_keyword_matcher(CATALYST_TERMS)
 _REGIONAL_RE, _REGIONAL_SYM = _build_keyword_matcher(REGIONAL_NOISE_TERMS)
 _COMMENTARY_RE, _COMMENTARY_SYM = _build_keyword_matcher(COMMENTARY_TERMS)
+_SPEECH_FIGURE_RE, _SPEECH_FIGURE_SYM = _build_keyword_matcher(
+    SPEECH_FIGURES | INFLUENTIAL_AUTHORS
+)
+
+
+def is_upcoming_speech(item: NewsItem) -> bool:
+    """True if the item announces an UPCOMING appearance by a market-moving
+    figure (speech / testimony / hearing / press conference).
+
+    Precision levers:
+    - intent language (SPEECH_INTENT_RE) must appear in title or body;
+    - a whitelisted figure (or an existing influential author) must be named;
+    - a past-tense title with no future hint is rejected (drops recaps).
+    """
+    title = item.title or ""
+    text = f"{title} {item.summary}"
+    if not SPEECH_INTENT_RE.search(text):
+        return False
+    # Title-only past-tense guard: "Powell spoke yesterday" -> drop, unless the
+    # title also carries a future framing ("spoke today, will speak tomorrow").
+    if _SPEECH_PAST_TENSE_RE.search(title) and not _SPEECH_FUTURE_HINT_RE.search(
+        title
+    ):
+        return False
+    low = text.lower()
+    return _matches(low, _SPEECH_FIGURE_RE, _SPEECH_FIGURE_SYM)
 
 
 def matches_keywords(item: NewsItem) -> bool:
@@ -323,6 +394,10 @@ def score_impact(item: NewsItem) -> int:
     score = item.impact  # source-seeded base (catalog base_impact)
 
     if item.official:
+        score += 25
+
+    # Upcoming-speech items are high-priority pre-event warnings.
+    if is_upcoming_speech(item):
         score += 25
 
     tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
@@ -415,13 +490,18 @@ def should_publish(item: NewsItem) -> bool:
 
     Numeric impact thresholding happens in ``filter_items``; this only weeds
     out items that are categorically out of scope."""
-    if not matches_keywords(item):
-        return False
+    # Obvious junk is dropped even for speech items.
     if is_ad(item):
         return False
     if is_price_horoscope(item):
         return False
     if is_historical(item):
+        return False
+    # Upcoming speeches bypass the keyword + opinion gates: a scheduled
+    # appearance by a market-moving figure is publishable on its own.
+    if is_upcoming_speech(item):
+        return True
+    if not matches_keywords(item):
         return False
     # Opinions/forecasts only from influential people with a track record.
     if is_opinion(item) and not (item.official or has_influential_author(item)):
@@ -439,18 +519,22 @@ def filter_items(
         if not should_publish(item):
             continue
         item.impact = score_impact(item)
+        # Tag upcoming-speech items so the writer renders the ⚠️ pre-event
+        # post; they also bypass the tier-2 filler gate below.
+        speech = is_upcoming_speech(item)
+        item.is_upcoming_speech = speech
         # Tier-2-only catalyst gate: an item whose only relevance is a
         # tier-2 keyword (large-cap equity / commodity / alt-coin / FX)
         # with NO catalyst, NO tier-1 anchor and from no official source
         # is filler ("Gold steady ahead of data", "Visa explores deal").
-        # Reject regardless of numeric score.
-        if not item.official:
+        # Reject regardless of numeric score. Speeches are exempt.
+        if not item.official and not speech:
             text = _text_of(item)
             tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
             catalysts = _count_distinct(text, _CATALYST_RE, _CATALYST_SYM)
             if tier1 == 0 and catalysts == 0:
                 continue
-        if item.impact < min_impact and not item.official:
+        if item.impact < min_impact and not item.official and not speech:
             continue
         kept.append(item)
     return kept

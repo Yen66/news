@@ -24,6 +24,7 @@ def make_item(
     impact: int = 40,
     guid: Optional[str] = None,
     published=_UNSET,
+    is_upcoming_speech: bool = False,
 ) -> NewsItem:
     # Default to "now" so the 24h age filter keeps test items, but allow an
     # explicit published=None (distinct from "not passed").
@@ -40,6 +41,7 @@ def make_item(
         impact=impact,
         guid=guid,
         published=published,
+        is_upcoming_speech=is_upcoming_speech,
     )
 
 

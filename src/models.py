@@ -135,6 +135,10 @@ class NewsItem:
     # Relative importance 0..100 used for prioritisation when near AI limits.
     impact: int = 0
     guid: Optional[str] = None
+    # Set by the filter pipeline when the item announces an UPCOMING speech /
+    # testimony / hearing for a market-moving figure. Drives the ⚠️ writer
+    # path (forward-looking post) instead of the ⚡️ breaking-news path.
+    is_upcoming_speech: bool = False
 
     @property
     def uid(self) -> str:

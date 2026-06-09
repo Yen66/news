@@ -95,6 +95,33 @@ _WRITER_TEMPLATE = (
     "Описание: {summary}"
 )
 
+# Forward-looking variant for UPCOMING speeches / testimonies / hearings.
+# Same field contract as _WRITER_SYSTEM (ПРЕФИКС/ТЕКСТ/ТИКЕРЫ) so parsing and
+# rendering are reused unchanged — only the framing differs.
+_SPEECH_WRITER_SYSTEM = (
+    "Ты — финансовый журналист CMW_News. Это анонс ПРЕДСТОЯЩЕГО публичного "
+    "выступления (речь, показания, слушания, пресс-конференция) важной для "
+    "рынков фигуры. Пиши на русском, по делу, без воды.\n\n"
+    "Правила:\n"
+    "- Это событие в БУДУЩЕМ, ещё не произошло. Не пиши так, будто оно "
+    "случилось.\n"
+    "- Первое предложение: кто и когда выступает. Если в материале указано "
+    "время — переведи его в московское время (МСК) и укажи: «Сегодня в "
+    "HH:MM МСК выступит …» или «Завтра в HH:MM МСК …». Если времени нет — "
+    "«Сегодня выступит …» без выдуманного времени.\n"
+    "- Второе-третье предложение: на что обратить внимание (темы выступления) "
+    "и возможное влияние на крипту и risk-активы (BTC, индексы, доллар, "
+    "облигации). Конкретно, без общих фраз.\n"
+    "- Максимум 3 предложения. Не выдумывай факты: опирайся только на "
+    "заголовок и описание. Не выдумывай время, если его нет.\n"
+    "- Только русский язык; латиница лишь для тикеров и имён. Без иероглифов, "
+    "без ссылок и URL.\n\n"
+    "Верни РОВНО эти поля, каждое с новой строки, без markdown:\n"
+    "ПРЕФИКС: ⚠️\n"
+    "ТЕКСТ: <до 3 предложений по правилам выше>\n"
+    "ТИКЕРЫ: <оставь пустым>"
+)
+
 _EDITOR_SYSTEM = (
     "Ты — выпускающий редактор срочных новостей. Сделай текст резче и "
     "увереннее, в стиле Bloomberg breaking news: убери смягчающие слова, "
@@ -131,9 +158,10 @@ _FORBIDDEN_PHRASES = (
 
 _URL_RE = re.compile(r"(https?://\S+|www\.\S+|t\.me/\S+)", re.IGNORECASE)
 
-# Allowed prefix emojis: the breaking-news bolt and country flags (two
-# regional-indicator symbols, U+1F1E6–U+1F1FF).
-_BOLT = "⚡️"
+# Allowed prefix emojis: the breaking-news bolt, the upcoming-event warning
+# sign, and country flags (two regional-indicator symbols, U+1F1E6–U+1F1FF).
+_BOLT = "⚡️"          # event already happened / breaking
+_WARN = "⚠️"          # upcoming, scheduled appearance (forward-looking)
 _FLAG_RE = re.compile("[\U0001F1E6-\U0001F1FF]{2}")
 
 
@@ -182,12 +210,15 @@ def _is_recent(item: NewsItem, window: timedelta = BREAKING_WINDOW) -> bool:
 
 
 def _clean_prefix(raw: str) -> str:
-    """Keep only an allowed prefix: the ⚡️ bolt or a single country flag."""
+    """Keep only an allowed prefix: the ⚡️ bolt, the ⚠️ warning sign, or a
+    single country flag."""
     if not raw:
         return ""
     flag = _FLAG_RE.search(raw)
     if flag:
         return flag.group(0)
+    if "⚠" in raw:
+        return _WARN
     if "⚡" in raw:
         return _BOLT
     return ""
@@ -295,8 +326,11 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     e = html.escape
 
     prefix = _clean_prefix(fields.get("ПРЕФИКС", ""))
-    # ⚡️ only for news published within the last 2 hours; flags are not gated.
-    if prefix == _BOLT and not _is_recent(item):
+    if item.is_upcoming_speech:
+        # Forward-looking appearance: always ⚠️, never the ⚡️ breaking bolt.
+        prefix = _WARN
+    elif prefix == _BOLT and not _is_recent(item):
+        # ⚡️ only for news published within the last 2h; flags are not gated.
         prefix = ""
 
     body = sanitize_text(_strip_urls(
@@ -337,8 +371,11 @@ class PostWriter:
             summary=(item.summary or "(нет описания)")[:1500],
         )
 
+        system = (
+            _SPEECH_WRITER_SYSTEM if item.is_upcoming_speech else _WRITER_SYSTEM
+        )
         raw, provider = await self._ai.complete(
-            _WRITER_SYSTEM, user, temperature=0.5, max_tokens=400
+            system, user, temperature=0.5, max_tokens=400
         )
         fields = _parse_fields(raw)
 

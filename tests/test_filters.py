@@ -135,3 +135,96 @@ def test_filter_items_updates_impact_and_filters():
     kept = filters.filter_items(items)
     assert len(kept) == 1
     assert kept[0].title.startswith("SEC")
+
+
+# === Upcoming-speech detection ============================================
+
+SPEECH_ACCEPT = [
+    "Trump to speak on tariffs at 2 PM ET",
+    "Powell to address Congress on monetary policy",
+    "Scott Bessent confirmation hearing set for Wednesday",
+    "Lutnick scheduled testimony on China trade",
+    "Lagarde is scheduled to speak Tuesday in Frankfurt",
+    "SEC chair to testify before Senate banking committee",
+    "Fed chair will deliver remarks at economic forum tomorrow",
+]
+
+
+def test_speech_detection_accepts_upcoming_appearances():
+    for title in SPEECH_ACCEPT:
+        assert filters.is_upcoming_speech(make_item(title)), title
+
+
+def test_speech_detection_matches_body_not_only_title():
+    item = make_item(
+        "Markets eye Washington",
+        summary="Donald Trump is scheduled to speak this afternoon on tariffs.",
+    )
+    assert filters.is_upcoming_speech(item)
+
+
+def test_speech_detection_russian():
+    assert filters.is_upcoming_speech(
+        make_item("Завтра Пауэлл выступит перед Конгрессом")
+    )
+
+
+SPEECH_REJECT = [
+    # Past tense (already happened) — must be dropped.
+    "Trump spoke yesterday on China tariffs",
+    "Powell told reporters inflation persists",
+    "Lagarde addressed lawmakers earlier today",
+    # Commentary, not an appearance announcement.
+    "Powell says inflation may persist",
+    "Trump's tariff comments sent markets lower",
+    # Intent language but no market-moving figure named.
+    "Markets brace for upcoming speech, stocks sell off",
+    "Local mayor scheduled to speak at city hall",
+]
+
+
+def test_speech_detection_rejects_false_positives():
+    for title in SPEECH_REJECT:
+        assert not filters.is_upcoming_speech(make_item(title)), title
+
+
+def test_past_tense_with_future_hint_still_detected():
+    # "spoke ... will speak" — future framing rescues it.
+    item = make_item("Trump spoke Monday and will speak again today on tariffs")
+    assert filters.is_upcoming_speech(item)
+
+
+def test_speech_bypasses_keyword_gate_in_should_publish():
+    # No tier keyword at all, yet a scheduled appearance must publish.
+    item = make_item("Trump to speak today")
+    assert not filters.matches_keywords(item)   # no tier word
+    assert filters.should_publish(item)          # but speech bypass wins
+
+
+def test_speech_still_blocked_if_ad_or_historical():
+    assert not filters.should_publish(
+        make_item("Sponsored: Trump to speak at our crypto summit")
+    )
+    assert not filters.should_publish(
+        make_item("In 2022 Trump spoke about crypto",
+                  summary="A look back at 2022.")
+    )
+
+
+def test_speech_gets_impact_bonus():
+    plain = make_item("Trump to speak today", impact=40)
+    # +25 speech bonus over the base.
+    assert filters.score_impact(plain) >= 65
+
+
+def test_filter_items_tags_speech_flag_and_keeps():
+    items = [make_item("Powell to address Congress tomorrow", impact=40)]
+    kept = filters.filter_items(items)
+    assert len(kept) == 1
+    assert kept[0].is_upcoming_speech is True
+
+
+def test_filter_items_does_not_tag_non_speech():
+    items = [make_item("Bitcoin rallies above 70k", impact=50)]
+    kept = filters.filter_items(items)
+    assert kept and kept[0].is_upcoming_speech is False

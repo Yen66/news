@@ -146,10 +146,61 @@ async def test_no_prefix_when_empty():
 def test_clean_prefix():
     assert _clean_prefix("⚡️") == "⚡️"
     assert _clean_prefix("⚡") == "⚡️"
+    assert _clean_prefix("⚠️") == "⚠️"
+    assert _clean_prefix("⚠") == "⚠️"
     assert _clean_prefix("🇺🇸") == "🇺🇸"
     assert _clean_prefix("🇷🇺 что-то") == "🇷🇺"
     assert _clean_prefix("") == ""
     assert _clean_prefix("просто текст") == ""
+
+
+# A speech reply that (wrongly) emits ⚡️ — the writer must still force ⚠️.
+_SPEECH_FIELDS_WRONG_PREFIX = (
+    "ПРЕФИКС: ⚡️\n"
+    "ТЕКСТ: Сегодня в 21:00 МСК выступит Дональд Трамп. Рынки ждут заявлений "
+    "по тарифам и торговой политике с Китаем — возможна волатильность в BTC "
+    "и индексах.\n"
+    "ТИКЕРЫ: "
+)
+
+
+async def test_speech_item_uses_warning_and_never_bolt():
+    ai = FakeAIClient(reply=_SPEECH_FIELDS_WRONG_PREFIX)
+    writer = PostWriter(ai, enable_editor=False)
+    item = make_item(
+        "Trump to speak today on tariffs",
+        source_name="CNBC", link="https://cnbc.com/a",
+        published=_now(),  # fresh — would normally allow ⚡️
+        is_upcoming_speech=True,
+    )
+    post = await writer.write(item)
+    # ⚠️ forced even though the model returned ⚡️ and the item is fresh.
+    assert post.body.startswith("⚠️ ")
+    assert "⚡️" not in post.body
+    # Still the normal footer (no custom source label).
+    assert post.body.strip().endswith(
+        '◉ Официально · <a href="https://cnbc.com/a">CNBC</a>'
+    )
+
+
+async def test_speech_writer_uses_speech_system_prompt():
+    ai = FakeAIClient(reply=_SPEECH_FIELDS_WRONG_PREFIX)
+    writer = PostWriter(ai, enable_editor=False)
+    await writer.write(make_item(
+        "Powell will address Congress", source_name="Reuters",
+        link="https://reuters.com/a", is_upcoming_speech=True))
+    # The system prompt handed to the AI is the forward-looking speech one.
+    system_prompt = ai.calls[0][0]
+    assert "ПРЕДСТОЯЩЕГО" in system_prompt
+
+
+async def test_non_speech_item_unaffected_still_uses_bolt():
+    ai = FakeAIClient(reply=FIELDS)
+    writer = PostWriter(ai, enable_editor=False)
+    post = await writer.write(make_item(
+        "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        published=_now()))  # is_upcoming_speech defaults False
+    assert post.body.startswith("⚡️ ")
 
 
 def test_established_sources_are_official():
