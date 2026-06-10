@@ -114,18 +114,60 @@ class _ProviderClient:
         return self._client
 
     async def complete(
-        self, system: str, user: str, temperature: float, max_tokens: int
+        self,
+        system: str,
+        user: str,
+        temperature: float,
+        max_tokens: int,
+        response_format: Optional[dict] = None,
     ) -> str:
-        resp = await self.client.chat.completions.create(
-            model=self.cfg.model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            messages=[
+        request_kwargs: dict = {
+            "model": self.cfg.model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
+        }
+        if response_format is not None:
+            request_kwargs["response_format"] = response_format
+
+        resp = await self.client.chat.completions.create(**request_kwargs)
+
+        # --- Telemetry (English logs) -----------------------------------
+        # Capture model identity, token accounting and finish_reason so
+        # provider rotation, prompt-size drift, and "length" truncation are
+        # diagnosable from the logs alone. Defensive getattr() so an SDK
+        # that omits a field never breaks the call path.
+        choice = resp.choices[0] if resp.choices else None
+        finish_reason = getattr(choice, "finish_reason", None) if choice else None
+        usage = getattr(resp, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        completion_tokens = getattr(usage, "completion_tokens", None)
+        total_tokens = getattr(usage, "total_tokens", None)
+        log.info(
+            "AI call: provider=%s model=%s prompt_tokens=%s "
+            "completion_tokens=%s total_tokens=%s finish_reason=%s "
+            "json_mode=%s",
+            self.cfg.name,
+            getattr(resp, "model", None),
+            prompt_tokens,
+            completion_tokens,
+            total_tokens,
+            finish_reason,
+            response_format is not None,
         )
-        return (resp.choices[0].message.content or "").strip()
+        if finish_reason == "length":
+            log.warning(
+                "AI call hit max_tokens=%d on provider=%s model=%s — "
+                "output likely truncated.",
+                max_tokens, self.cfg.name, getattr(resp, "model", None),
+            )
+
+        if choice is None:
+            return ""
+        return (choice.message.content or "").strip()
 
 
 class AIClient:
@@ -158,9 +200,12 @@ class AIClient:
         *,
         temperature: float = 0.4,
         max_tokens: int = 800,
+        response_format: Optional[dict] = None,
     ) -> tuple[str, str]:
         """Return ``(text, provider_name)``, rotating on quota errors.
 
+        ``response_format`` is forwarded to the OpenAI-compatible SDK so
+        callers can request structured JSON output (e.g. the writer pass).
         Raises :class:`AllProvidersExhausted` if every provider fails.
         """
         if not self._providers:
@@ -173,7 +218,8 @@ class AIClient:
             for attempt in range(2):
                 try:
                     text = await provider.complete(
-                        system, user, temperature, max_tokens
+                        system, user, temperature, max_tokens,
+                        response_format=response_format,
                     )
                     if text:
                         return text, provider.name

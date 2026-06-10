@@ -15,6 +15,8 @@ confident, direct, numbers-first, no hedging, no emoji, Russian.
 from __future__ import annotations
 
 import html
+import inspect
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -80,26 +82,40 @@ _WRITER_SYSTEM = (
     "смягчители «возможно», «вероятно», «может», «могут», «скорее всего», и "
     "любые ссылки или URL.\n"
     "- Не выдумывай факты: опирайся только на заголовок и описание.\n\n"
-    "Верни РОВНО эти поля, каждое с новой строки, без markdown и без любого "
-    "другого текста:\n"
-    "ПРЕФИКС: <пусто; либо ⚡️ если новость действительно срочная/прорывная; "
-    "либо флаг страны (🇺🇸 🇷🇺 🇨🇳 🇪🇺 и т.п.), если это новость о "
-    "регулировании или политике конкретной страны>\n"
-    "ТЕКСТ: <до 3 предложений; начни с числа или цитаты; в каждом предложении "
-    "конкретный факт>\n"
-    "ТИКЕРЫ: <активно извлекай ценовые данные из материала. Если упомянуты "
-    "любая цена, процентное изменение или капитализация — обязательно добавь "
-    "строку вида \"BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)\". Если точных "
-    "цен нет, всё равно покажи проценты или сумму потерь в формате тикера, "
-    "например \"Капитализация: -$390 млрд · BTC ↓7,25% · ETH ↓12,3%\". "
-    "↑ для роста, ↓ для падения. Если в материале нет ни цен, ни процентов, "
-    "ни капитализации — оставь поле пустым>"
+    "ФОРМАТ ОТВЕТА — ВАЛИДНЫЙ JSON-ОБЪЕКТ С ТРЕМЯ СТРОКОВЫМИ ПОЛЯМИ:\n"
+    "{\n"
+    "  \"prefix\":  \"<пусто; либо ⚡️ если новость действительно срочная/"
+    "прорывная; либо флаг страны (🇺🇸 🇷🇺 🇨🇳 🇪🇺 и т.п.), если это новость о "
+    "регулировании или политике конкретной страны>\",\n"
+    "  \"text\":    \"<до 3 предложений; начни с числа или цитаты; в каждом "
+    "предложении конкретный факт>\",\n"
+    "  \"tickers\": \"<строка с тикерами и движением, например "
+    "\\\"BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)\\\". Если точных цен "
+    "нет, покажи проценты или капитализацию в формате тикера, например "
+    "\\\"Капитализация: -$390 млрд · BTC ↓7,25%\\\". ↑ для роста, ↓ для "
+    "падения. Если в материале нет ни цен, ни процентов, ни капитализации — "
+    "пустая строка>\"\n"
+    "}\n\n"
+    "Примеры.\n\n"
+    "Пример 1 (решение ФРС по ставке).\n"
+    "Input: \"ФРС снизила ставку на 25 б.п., до 4.5%\"\n"
+    "Output: {\"prefix\": \"🇺🇸\", \"text\": \"ФРС снизила ставку на 25 "
+    "базисных пунктов до 4.5%. Решение единогласное. Следующее заседание — "
+    "18 сентября.\", \"tickers\": \"BTC: $61 200 (↑1.2%) · S&P 500 +0.8%\"}\n\n"
+    "Пример 2 (листинг на Coinbase).\n"
+    "Input: \"Coinbase добавила торговую пару PEPE/USDT\"\n"
+    "Output: {\"prefix\": \"\", \"text\": \"Coinbase листит PEPE/USDT. Торги "
+    "начнутся через 2 часа. Объём за последние сутки на споте вырос за $40 "
+    "млн.\", \"tickers\": \"\"}\n\n"
+    "Выведи ТОЛЬКО JSON-объект, без markdown, без обёрток ``` и без любого "
+    "другого текста."
 )
 
 _WRITER_TEMPLATE = (
     "Источник: {source_name} ({kind}).\n"
     "Заголовок: {title}\n"
-    "Описание: {summary}"
+    "Описание: {summary}\n\n"
+    "Ответ должен быть валидным JSON-объектом с полями prefix, text, tickers."
 )
 
 # Forward-looking variant for UPCOMING speeches / testimonies / hearings.
@@ -123,10 +139,13 @@ _SPEECH_WRITER_SYSTEM = (
     "заголовок и описание. Не выдумывай время, если его нет.\n"
     "- Только русский язык; латиница лишь для тикеров и имён. Без иероглифов, "
     "без ссылок и URL.\n\n"
-    "Верни РОВНО эти поля, каждое с новой строки, без markdown:\n"
-    "ПРЕФИКС: ⚠️\n"
-    "ТЕКСТ: <до 3 предложений по правилам выше>\n"
-    "ТИКЕРЫ: <оставь пустым>"
+    "ФОРМАТ ОТВЕТА — ВАЛИДНЫЙ JSON-ОБЪЕКТ:\n"
+    "{\n"
+    "  \"prefix\":  \"⚠️\",\n"
+    "  \"text\":    \"<до 3 предложений по правилам выше>\",\n"
+    "  \"tickers\": \"\"\n"
+    "}\n\n"
+    "Выведи ТОЛЬКО JSON-объект, без markdown и без любого другого текста."
 )
 
 _EDITOR_SYSTEM = (
@@ -362,10 +381,81 @@ def is_official_post(item: NewsItem) -> bool:
     return credibility_label(item) == LABEL_OFFICIAL
 
 
-def _parse_fields(text: str) -> dict[str, str]:
-    """Leniently parse the four labelled fields from the model output."""
+# JSON-first parsing. The model is instructed (and the API call asks it via
+# response_format=json_object) to return ``{"prefix": ..., "text": ...,
+# "tickers": ...}``. JSON keys are normalised to the legacy uppercase Cyrillic
+# names so the renderer and the rest of the pipeline see one shape regardless
+# of which path produced the dict.
+_JSON_KEY_MAP = {"prefix": "ПРЕФИКС", "text": "ТЕКСТ", "tickers": "ТИКЕРЫ"}
+_CODE_FENCE_RE = re.compile(
+    r"\A\s*```(?:json)?\s*\n?|\n?\s*```\s*\Z", re.IGNORECASE
+)
+
+
+def truncate_at_sentence(text: str, max_chars: int = 1500) -> str:
+    """Truncate ``text`` at the last full stop / exclamation / question mark
+    that falls within ``max_chars``. If no such boundary exists, hard-slice and
+    append ``"..."``. Returns ``""`` for empty / None input.
+    """
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    head = text[:max_chars]
+    last_boundary = max(head.rfind("."), head.rfind("!"), head.rfind("?"))
+    if last_boundary >= 0:
+        return head[: last_boundary + 1].rstrip()
+    return head.rstrip() + "..."
+
+
+def _parse_fields(raw: str) -> dict[str, str]:
+    """Parse the model output into the canonical field dict.
+
+    Prefers a JSON object with keys ``prefix`` / ``text`` / ``tickers`` and
+    falls back to the legacy labelled-line regex on JSON failure (logged).
+    Returned keys are the canonical uppercase Cyrillic names so the renderer
+    sees one shape regardless of source.
+    """
+    stripped = (raw or "").strip()
+    # Tolerate a markdown code fence even though we ask the model not to use one.
+    if stripped.startswith("```"):
+        stripped = _CODE_FENCE_RE.sub("", stripped).strip()
+
+    try:
+        data = json.loads(stripped)
+    except ValueError as exc:
+        # json.JSONDecodeError is a subclass of ValueError.
+        log.warning(
+            "JSON parse failed (%s); falling back to legacy parser. "
+            "First 120 chars: %r",
+            exc, stripped[:120],
+        )
+        return _parse_legacy_fields(raw)
+
+    if not isinstance(data, dict):
+        log.warning(
+            "Model returned JSON %s, expected object; falling back to "
+            "legacy parser.",
+            type(data).__name__,
+        )
+        return _parse_legacy_fields(raw)
+
     fields: dict[str, str] = {}
-    for line in text.splitlines():
+    for json_key, canonical in _JSON_KEY_MAP.items():
+        val = data.get(json_key)
+        if val is None:
+            continue
+        fields[canonical] = str(val).strip()
+    return fields
+
+
+def _parse_legacy_fields(text: str) -> dict[str, str]:
+    """Legacy labelled-line parser (``ПРЕФИКС: ...`` / ``ТЕКСТ: ...`` / etc.).
+    Kept as a fallback for non-JSON model responses and exercised by tests
+    that pre-date the JSON contract.
+    """
+    fields: dict[str, str] = {}
+    for line in (text or "").splitlines():
         m = _FIELD_RE.match(line)
         if m:
             fields[m.group(1).upper()] = m.group(2).strip()
@@ -417,37 +507,61 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     return "\n".join(lines)
 
 
+def _ai_accepts_response_format(complete_method) -> bool:
+    """True if ``complete_method`` accepts a ``response_format`` keyword.
+
+    The production :class:`AIClient.complete` does; legacy test fakes whose
+    signature pre-dates the JSON contract do not. Feature-detecting here
+    keeps the writer's call site clean without coupling production code to
+    a specific fake.
+    """
+    try:
+        params = inspect.signature(complete_method).parameters
+    except (TypeError, ValueError):
+        return False
+    if "response_format" in params:
+        return True
+    return any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+    )
+
+
 class PostWriter:
     def __init__(self, ai: AIClient, *, enable_editor: bool = True) -> None:
         self._ai = ai
         self._enable_editor = enable_editor
+        self._ai_supports_json = _ai_accepts_response_format(ai.complete)
 
     async def write(self, item: NewsItem) -> Post:
         user = _WRITER_TEMPLATE.format(
             source_name=item.source_name,
             kind=item.source_kind,
             title=item.title,
-            summary=(item.summary or "(нет описания)")[:1500],
+            summary=truncate_at_sentence(item.summary or "(нет описания)"),
         )
 
         system = (
             _SPEECH_WRITER_SYSTEM if item.is_upcoming_speech else _WRITER_SYSTEM
         )
-        raw, provider = await self._ai.complete(
-            system, user, temperature=0.5, max_tokens=400
-        )
+
+        writer_kwargs: dict = {"temperature": 0.2, "max_tokens": 600}
+        if self._ai_supports_json:
+            writer_kwargs["response_format"] = {"type": "json_object"}
+
+        raw, provider = await self._ai.complete(system, user, **writer_kwargs)
         fields = _parse_fields(raw)
 
         editor_used = False
         official = is_official_post(item)
         # Proofread the main text only for important posts: officially-credible
-        # OR high-impact.
+        # OR high-impact. The editor returns free text, so it does NOT request
+        # response_format=json_object.
         important = official or item.impact >= 70
         if self._enable_editor and important and fields.get("ТЕКСТ"):
             try:
                 edited, _ = await self._ai.complete(
-                    _EDITOR_SYSTEM, fields["ТЕКСТ"], temperature=0.2,
-                    max_tokens=300,
+                    _EDITOR_SYSTEM, fields["ТЕКСТ"], temperature=0.1,
+                    max_tokens=400,
                 )
                 if edited.strip():
                     fields["ТЕКСТ"] = edited.strip()
