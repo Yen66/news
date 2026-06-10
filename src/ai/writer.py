@@ -108,7 +108,10 @@ _WRITER_SYSTEM = (
     "начнутся через 2 часа. Объём за последние сутки на споте вырос за $40 "
     "млн.\", \"tickers\": \"\"}\n\n"
     "Выведи ТОЛЬКО JSON-объект, без markdown, без обёрток ``` и без любого "
-    "другого текста."
+    "другого текста.\n"
+    "Never use Greek letters (λ, μ, π) or backslash commands like \\cdot. "
+    "Use only standard punctuation: . , ! ? : ; % $ № and spaces. Always "
+    "output valid JSON as shown."
 )
 
 _WRITER_TEMPLATE = (
@@ -241,6 +244,22 @@ def _clean_body(raw_text: str) -> str:
     body = _strip_forbidden(body)
     body = _keep_concrete_sentences(body)
     return body
+
+
+def _clean_artifacts(text: str) -> str:
+    # Replace specific corrupted patterns
+    text = text.replace('Cλυх', 'Слух')
+    text = text.replace('cλυх', 'слух')
+    text = text.replace('G00GL', 'GOOGL')
+    # Remove backslash commands like \cdot
+    text = text.replace(r'\cdot', '·')
+    # Remove any remaining backslash followed by a word (e.g., \text)
+    text = re.sub(r'\\[a-zA-Z]+', '', text)
+    # Remove truncated word fragments like "сокры..." (Cyrillic letters followed by ellipsis)
+    text = re.sub(r'\b[а-яёА-ЯЁ]+\·{3,}', '', text)
+    # Clean up any double spaces created by removals
+    text = re.sub(r' {2,}', ' ', text)
+    return text.strip()
 
 
 # --- Phase 6: deterministic AI-output validation --------------------------
@@ -487,6 +506,9 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
         prefix = ""
 
     body = _clean_body(fields.get("ТЕКСТ") or item.summary or item.title or "")
+    # Remove model artifacts (Greek look-alikes, backslash commands, truncated
+    # fragments) from the rendered text before it reaches Telegram.
+    body = _clean_artifacts(body)
 
     tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 
@@ -544,7 +566,7 @@ class PostWriter:
             _SPEECH_WRITER_SYSTEM if item.is_upcoming_speech else _WRITER_SYSTEM
         )
 
-        writer_kwargs: dict = {"temperature": 0.2, "max_tokens": 600}
+        writer_kwargs: dict = {"temperature": 0.2, "max_tokens": 800}
         if self._ai_supports_json:
             writer_kwargs["response_format"] = {"type": "json_object"}
 
