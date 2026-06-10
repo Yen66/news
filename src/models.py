@@ -42,6 +42,40 @@ _STOPWORDS = {
     "как", "что", "это", "для", "при", "над", "под", "его", "она", "они",
 }
 
+# Phase 8 — event-synonym canonicalization for the numberless story key.
+# Outlets describe the SAME event with interchangeable verbs ("Meta announces"
+# vs "Meta unveils"); mapping them to one canonical token lets the dedup
+# collapse those retellings without embeddings or external services. Only
+# genuine synonyms are grouped — distinct actions stay distinct.
+_VERB_SYNONYMS = {
+    # announce / reveal a thing
+    "announces": "announce", "announced": "announce",
+    "announcement": "announce", "unveils": "announce", "unveiled": "announce",
+    "unveil": "announce", "reveals": "announce", "revealed": "announce",
+    "introduces": "announce", "introduced": "announce", "debuts": "announce",
+    "debuted": "announce", "presents": "announce", "presented": "announce",
+    # launch / release / go live
+    "launches": "launch", "launched": "launch", "releases": "launch",
+    "released": "launch", "rollout": "launch", "rolls": "launch",
+    # acquire / buy
+    "acquires": "acquire", "acquired": "acquire", "acquisition": "acquire",
+    "buys": "acquire", "bought": "acquire", "purchases": "acquire",
+    "purchased": "acquire", "purchase": "acquire",
+    # raise funding
+    "raises": "raise", "raised": "raise", "secures": "raise",
+    "secured": "raise",
+    # approve / reject
+    "approves": "approve", "approved": "approve", "approval": "approve",
+    "rejects": "reject", "rejected": "reject", "rejection": "reject",
+    # legal
+    "sues": "sue", "sued": "sue", "lawsuit": "sue",
+    "charges": "charge", "charged": "charge",
+    # partnership
+    "partners": "partner", "partnership": "partner", "partnered": "partner",
+    # rate moves
+    "hikes": "hike", "hiked": "hike",
+}
+
 # Number tokens like $59K, 59,000, 1.2bn, 7,25% -> normalised canonical form.
 _NUM_RE = re.compile(
     r"\$?\d[\d.,]*\s*(?:k|m|bn|b|t|млрд|млн|трлн|тыс|thousand|million|billion|trillion)?%?",
@@ -106,8 +140,12 @@ def story_tokens(title: str) -> List[str]:
     if nums:
         tokens = base
     else:
+        # Canonicalise event-synonym verbs so "Meta announces X" and "Meta
+        # unveils X" produce the same numberless key (Phase 8).
         significant = {
-            w for w in words_lower if len(w) >= 4 and w not in _STOPWORDS
+            _VERB_SYNONYMS.get(w, w)
+            for w in words_lower
+            if len(w) >= 4 and w not in _STOPWORDS
         }
         tokens = base | significant
     return sorted(tokens)

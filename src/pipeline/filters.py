@@ -122,6 +122,89 @@ CATALYST_TERMS = {
     "resigns", "sanctions",
 }
 
+# === EVENT-FIRST PUBLISHING (Phase 1) =====================================
+# A news channel publishes EVENTS. ``EVENT_TERMS`` are concrete, completed (or
+# officially scheduled) ACTIONS — something HAPPENED. These are the positive
+# admission signal: an item with no event term, no price move on a tier-1
+# subject, no geopolitical catalyst, and no official/influential backing is
+# topic / analysis / forecast filler, not news.
+#
+# Deliberately ACTION VERBS, not outcome nouns: "announces partnership" is an
+# event, a bare "partnership" headline ("Visa explores partnership") is not —
+# the verb is what makes it news.
+EVENT_TERMS = {
+    # corporate / product / market structure
+    "announces", "announced", "announce", "unveils", "unveiled", "unveil",
+    "launches", "launched", "launch", "introduces", "introduced", "debuts",
+    "debuted", "rolls out", "rolled out", "releases", "released",
+    "lists", "listed", "listing", "delists", "delisted", "relists",
+    "acquires", "acquired", "acquisition", "merges", "merged", "merger",
+    "buys", "bought", "purchases", "purchased", "sells", "sold", "stake",
+    "partners", "partnered",
+    "raises", "raised", "secures", "secured", "closes round", "funding round",
+    "ipo", "spinoff", "spin-off", "delivers", "delivered",
+    # earnings / guidance
+    "reports", "reported", "posts", "posted", "earnings", "guidance",
+    "beats", "beat", "misses", "missed", "results",
+    # regulators / law / courts
+    "approves", "approved", "approval", "rejects", "rejected", "rejection",
+    "files", "filed", "filing", "sues", "sued", "lawsuit", "charges",
+    "charged", "settles", "settled", "settlement", "fines", "fined",
+    "rules", "ruled", "ruling", "verdict", "indicts", "indicted",
+    "passes", "passed", "enacts", "enacted", "signs", "signed", "ratifies",
+    "ratified", "vetoes", "vetoed", "bans", "banned", "halts", "halted",
+    "suspends", "suspended", "freezes", "froze", "frozen", "seizes", "seized",
+    "imposes", "imposed", "investigates", "investigated", "probe",
+    "issues", "issued", "orders", "ordered", "mandates", "warns",
+    # central banks / macro releases
+    "hikes", "hiked", "cuts", "cut", "raises rates", "holds", "held",
+    "decision", "statement", "minutes", "release", "released",
+    # incidents
+    "hack", "hacked", "hacks", "breach", "breached", "exploit", "exploited",
+    "drained", "outage", "halt", "default", "defaults", "defaulted",
+    "bankruptcy", "liquidation", "liquidated", "recall", "recalls",
+    "layoffs", "lays off", "resigns", "resigned", "steps down", "appoints",
+    "appointed", "names", "named", "fires", "fired", "ousts",
+    # upgrades / launches / records
+    "upgrade", "upgraded", "goes live", "went live", "mainnet", "activates",
+    "activated", "record", "all-time high", "milestone",
+    "confirms", "confirmed", "wins", "won",
+    # milestone / level-reaching (a current event, not a forecast — the
+    # forecast gate runs first and catches "could hit / may reach")
+    "hits", "hit", "reaches", "reached", "reach", "tops", "topped",
+    "touches", "touched", "crosses", "crossed", "breaches", "breached",
+    "surpasses", "surpassed", "returns", "returned", "recovers", "recovered",
+    "rebounds", "rebounded", "extends", "hovers",
+    # geopolitical action verbs
+    "ceasefire", "invades", "invaded", "strikes", "struck", "agrees",
+    "agreed", "withdraws", "withdrew", "deploys", "deployed",
+}
+
+# Price-action verbs. A MOVE is an event ONLY when the subject is a tier-1
+# market mover (BTC/ETH, an index, a mega-cap, a macro series). A bare move on
+# an obscure or meme asset is a recap, not news.
+MOVE_TERMS = {
+    "surges", "surge", "surged", "soars", "soar", "soared", "plunges",
+    "plunge", "plunged", "tumbles", "tumble", "tumbled", "crashes", "crash",
+    "crashed", "spikes", "spike", "spiked", "rallies", "rally", "rallied",
+    "jumps", "jump", "jumped", "drops", "drop", "dropped", "falls", "fall",
+    "fell", "rises", "rise", "rose", "slides", "slide", "slid", "slips",
+    "slip", "slipped", "climbs", "climb", "climbed", "gains", "gain",
+    "gained", "sheds", "shed", "sinks", "sink", "sank", "tanks", "tank",
+    "tanked", "rockets", "rocket", "rocketed", "dips", "dip", "dipped",
+    "spirals", "craters", "slumps", "slump", "dives", "dive", "pops",
+}
+
+# Memecoins / pump-driven assets. Price action on these is NOT news; they need
+# a real event (listing, hack, lawsuit, major launch) to publish (Phase 7).
+MEMECOIN_TERMS = {
+    "dogecoin", "doge", "shiba", "shib", "shiba inu", "pepe", "bonk", "floki",
+    "dogwifhat", "wif", "meme coin", "memecoin", "mog", "brett", "popcat",
+    "bome", "book of meme", "siren", "buildon", "baby doge", "turbo",
+    "mother", "daddy", "fartcoin", "neiro",
+}
+
+
 # === Penalty vocabularies =================================================
 # Obscure / regional indexes & local markets — noise for a crypto/macro desk.
 REGIONAL_NOISE_TERMS = {
@@ -306,6 +389,10 @@ _TIER1_RE, _TIER1_SYM = _build_keyword_matcher(TIER1_TERMS)
 _TIER2_RE, _TIER2_SYM = _build_keyword_matcher(TIER2_TERMS)
 _RELEVANT_RE, _RELEVANT_SYM = _build_keyword_matcher(RELEVANT_KEYWORDS)
 _CATALYST_RE, _CATALYST_SYM = _build_keyword_matcher(CATALYST_TERMS)
+_EVENT_RE, _EVENT_SYM = _build_keyword_matcher(EVENT_TERMS)
+_MOVE_RE_KW, _MOVE_SYM = _build_keyword_matcher(MOVE_TERMS)
+_GEO_RE, _GEO_SYM = _build_keyword_matcher(GEOPOLITICAL_TERMS)
+_MEME_RE, _MEME_SYM = _build_keyword_matcher(MEMECOIN_TERMS)
 _REGIONAL_RE, _REGIONAL_SYM = _build_keyword_matcher(REGIONAL_NOISE_TERMS)
 _COMMENTARY_RE, _COMMENTARY_SYM = _build_keyword_matcher(COMMENTARY_TERMS)
 _SPEECH_FIGURE_RE, _SPEECH_FIGURE_SYM = _build_keyword_matcher(
@@ -459,9 +546,61 @@ _HISTORICAL_PHRASES = [
 
 _YEAR_RE = re.compile(r"\b(20[0-9]{2})\b")
 
+# A year used as a COMPARISON REFERENCE ("since 2021", "last seen in 2020",
+# "highest since 2022") anchors a CURRENT event — the year is a benchmark, not
+# the topic. These must PASS (Phase 3 false-positive fix).
+_YEAR_REFERENCE_RE = re.compile(
+    r"\b(?:since|"
+    r"last\s+seen\s+(?:in|since)|not\s+seen\s+since|seen\s+since|"
+    r"compared\s+(?:to|with)|versus|vs\.?|"
+    r"(?:high|low|highest|lowest|strongest|weakest|best|worst|most|peak)"
+    r"[^.]{0,20}?\bsince)\s+(?:\w+\s+){0,3}?20[0-9]{2}\b",
+    re.I,
+)
+
+# Phrasing that makes a PAST YEAR the TOPIC of the article (retrospective):
+# the title opens with a year, "YYYY was/became/changed", "lessons from",
+# "the YYYY bull market", "why YYYY", "YYYY cycle", etc. These must FAIL.
+_RETRO_TOPIC_RE = re.compile(
+    r"^\s*20(?:1[0-9]|2[0-5])\b"                       # title opens with a past year
+    r"|\b20(?:1[0-9]|2[0-5])\s+(?:was|were|saw|marked|became|brought|"
+    r"will\s+be\s+remembered|changed|turned|defined|reshaped)\b"
+    r"|\bwhy\s+20(?:1[0-9]|2[0-5])\b"
+    r"|\blessons?\s+(?:from|of)\b"
+    r"|\bthe\s+20(?:1[0-9]|2[0-5])\s+(?:bull|bear|crash|collapse|cycle|rally|"
+    r"crisis|boom|mania|meltdown|run)\b"
+    r"|\b20(?:1[0-9]|2[0-5])\s+(?:bull\s+market|bear\s+market|cycle|crash|"
+    r"collapse|retrospective|mania|boom|meltdown)\b"
+    r"|\b(?:cycle|market|crash|collapse)\s+(?:lessons|retrospective)\b",
+    re.I,
+)
+
 
 def _current_year() -> int:
     return datetime.now(timezone.utc).year
+
+
+def is_year_reference(item: NewsItem) -> bool:
+    """True if every past-year mention is a comparison reference (since/last
+    seen in), i.e. the year anchors a current event rather than being the
+    topic."""
+    text = f"{item.title} {item.summary}"
+    return bool(_YEAR_REFERENCE_RE.search(text))
+
+
+def is_retrospective_topic(item: NewsItem) -> bool:
+    """True if the article is structurally ABOUT a past year/era.
+
+    A comparison reference ("last seen in 2020", "highest since 2021") is a
+    benchmark for a current event, NOT a retrospective topic — so an
+    incidental "in 2020" inside such a phrase does not flag it.
+    """
+    text = f"{item.title} {item.summary}"
+    if _RETRO_TOPIC_RE.search(text):
+        return True
+    if _YEAR_REFERENCE_RE.search(text):
+        return False
+    return any(p.search(text) for p in _HISTORICAL_PHRASES)
 
 
 def title_is_historical(item: NewsItem) -> bool:
@@ -477,13 +616,28 @@ def title_is_historical(item: NewsItem) -> bool:
 def is_historical(item: NewsItem) -> bool:
     """True if the article's PRIMARY topic is an event from 2+ years ago.
 
-    Heuristic: title is retrospective (years <= last year and none current),
-    OR the body has a strong retrospective phrase AND no current-year date
-    mention (which would mean the old year is just context, not topic).
+    Phase-3 redesign — distinguish ARTICLE-ABOUT-THE-PAST from CURRENT-EVENT-
+    WITH-HISTORICAL-REFERENCE:
+
+    1. Retrospective-topic phrasing ("2016 was…", "lessons from the 2021 bull
+       market", "why 2022 changed crypto") => historical, unconditionally.
+    2. Otherwise, a past year used as a COMPARISON REFERENCE ("falls to levels
+       last seen in 2020", "highest since 2021") anchors a CURRENT event =>
+       NOT historical.
+    3. Fallback: a title made only of past years, OR a body retrospective
+       phrase with no current/last-year anchor.
     """
+    text = f"{item.title} {item.summary}"
+    # 1) Explicit retrospective topic always wins.
+    if _RETRO_TOPIC_RE.search(text):
+        return True
+    # 2) Comparison-reference rescue: the year is a benchmark for a current
+    #    event, not the subject.
+    if _YEAR_REFERENCE_RE.search(text):
+        return False
+    # 3) Original heuristics.
     if title_is_historical(item):
         return True
-    text = f"{item.title} {item.summary}"
     has_retrospective = any(p.search(text) for p in _HISTORICAL_PHRASES)
     if not has_retrospective:
         return False
@@ -492,6 +646,153 @@ def is_historical(item: NewsItem) -> bool:
     body_years = set(_YEAR_RE.findall(text))
     # If a current/last-year date is mentioned, the old year is likely context.
     if body_years & current_years:
+        return False
+    return True
+
+
+# === Event detection (Phase 1) ============================================
+def has_real_event(item: NewsItem) -> bool:
+    """True if the TITLE describes a real, current event (Phase 1).
+
+    Event-first publishing: an item must carry a concrete action, an official
+    backing, a named principal, a geopolitical catalyst, or a price move on a
+    tier-1 subject. Title-only by design (RC-α): RSS summaries always carry a
+    stray number/verb, so admission must be driven by the headline.
+    """
+    if item.official or is_upcoming_speech(item):
+        return True
+    # A named market-moving principal (Powell/Musk/SEC chair/...) makes even a
+    # terse headline newsworthy.
+    if has_influential_author(item):
+        return True
+    title = (item.title or "").lower()
+    # Geopolitical catalysts are events in their own right (shutdown looms,
+    # ceasefire, sanctions, election) even without a separate action verb.
+    if _matches(title, _GEO_RE, _GEO_SYM):
+        return True
+    # An explicit event/action verb.
+    if _matches(title, _EVENT_RE, _EVENT_SYM):
+        return True
+    # A price move counts as an event ONLY for a tier-1 market mover.
+    if _matches(title, _MOVE_RE_KW, _MOVE_SYM) and _matches(
+        title, _TIER1_RE, _TIER1_SYM
+    ):
+        return True
+    return False
+
+
+# === Forecast / price-target rejection (Phase 4) ==========================
+# Modal speculation pointed at a price move: "could reach", "may surge",
+# "will hit $200k", "expected to rally".
+_FORECAST_MODAL_MOVE_RE = re.compile(
+    r"\b(?:could|would|will|may|might|set\s+to|poised\s+to|expected\s+to|"
+    r"on\s+track\s+to|on\s+pace\s+to|likely\s+to|projected\s+to)\s+"
+    r"(?:\w+\s+){0,2}?"
+    r"(?:reach|hit|rise|rally|surge|soar|climb|jump|top|tops|test|retest|"
+    r"revisit|return|rebound|recover|fall|drop|crash|plunge|sink|tumble|"
+    r"slide|dip|double|triple|moon|explode|breakout|break|reclaim)\b",
+    re.I,
+)
+# "Analysts expect / strategists predict / traders eye ..."
+_FORECAST_ANALYST_RE = re.compile(
+    r"\b(?:analysts?|strategists?|traders?|experts?|economists?|"
+    r"researchers?|bulls?|bears?)\b[^.]{0,40}?\b"
+    r"(?:expect|expects|predict|predicts|forecasts?|see|sees|eye|eyes|"
+    r"target|targets|project|projects|anticipate|anticipates|brace)\b",
+    re.I,
+)
+# Analyst price targets.
+_PRICE_TARGET_RE = re.compile(
+    r"\bprice\s+target\b|\btarget\s+price\b|"
+    r"\b(?:raises?|raised|cuts?|cut|lifts?|lifted|lowers?|lowered|trims?|"
+    r"trimmed|sets?|set|boosts?|boosted|hikes?|slashes?)\s+"
+    r"(?:\w+\s+){0,3}?(?:price\s+)?target\b|"
+    r"\bpt\s+(?:raised|cut|lifted|to)\b",
+    re.I,
+)
+# Forecast / opinion topic labels.
+_FORECAST_TOPIC_RE = re.compile(
+    r"\b(?:outlook|forecast|prediction|predictions|thesis|investment\s+case|"
+    r"bull\s+case|bear\s+case|price\s+prediction|year\s+ahead\s+outlook)\b",
+    re.I,
+)
+# "hotter than forecast", "beat forecast", "in line with forecast" — these are
+# FACTUAL release reporting, NOT a forecast article.
+_FORECAST_FACTUAL_CONTEXT_RE = re.compile(
+    r"\b(?:than|vs\.?|versus|above|below|beat|beats|beating|topped?|tops|"
+    r"miss(?:ed|es)?|hotter|cooler|stronger|weaker|softer|in\s+line\s+with|"
+    r"matched?|exceeded?)\s+(?:\w+\s+){0,3}?forecast",
+    re.I,
+)
+
+
+def is_forecast(item: NewsItem) -> bool:
+    """True if the item is primarily a forecast / prediction / price target."""
+    title = item.title or ""
+    if _FORECAST_MODAL_MOVE_RE.search(title):
+        return True
+    if _FORECAST_ANALYST_RE.search(title):
+        return True
+    if _PRICE_TARGET_RE.search(title):
+        return True
+    if _FORECAST_TOPIC_RE.search(title):
+        # "3.2%, hotter than forecast" is a factual print, not a forecast.
+        if _FORECAST_FACTUAL_CONTEXT_RE.search(title):
+            return False
+        return True
+    return False
+
+
+# === Technical-analysis rejection (Phase 5) ===============================
+# Unambiguous TA indicators / chart patterns.
+_TA_STRONG_RE = re.compile(
+    r"\b(?:rsi|macd|fibonacci|fib\s+retracement|retracement|golden\s+cross|"
+    r"death\s+cross|double\s+top|double\s+bottom|head\s+and\s+shoulders|"
+    r"bollinger|moving\s+average|trend\s*line|chart\s+pattern|breakout|"
+    r"breakdown|overbought|oversold|ascending\s+triangle|descending\s+triangle|"
+    r"falling\s+wedge|rising\s+wedge|bull\s+flag|bear\s+flag|pennant|"
+    r"elliott\s+wave|candle(?:stick)?\s+pattern|cup\s+and\s+handle|"
+    r"(?:50|100|200)[- ]?day\s+(?:ma|moving\s+average)|ema\b|sma\b)\b",
+    re.I,
+)
+# Support / resistance / price-level framing (kept title-scoped to limit FPs:
+# "SEC support for X" must not trip it).
+_TA_LEVEL_RE = re.compile(
+    r"\b(?:support|resistance)\s+(?:level|zone|line|area|band)\b|"
+    r"\b(?:key|major|critical|strong)\s+(?:support|resistance)\b|"
+    r"\b(?:support|resistance)\b[^.]{0,15}?\$?\d[\d.,]*\s*[kK%]?\b|"
+    r"\bprice\s+level(?:s)?\b|\bkey\s+level(?:s)?\b",
+    re.I,
+)
+
+
+def is_technical_analysis(item: NewsItem) -> bool:
+    """True if the item is primarily chart / technical analysis (Phase 5)."""
+    title = item.title or ""
+    if _TA_STRONG_RE.search(title):
+        return True
+    if _TA_LEVEL_RE.search(title):
+        return True
+    return False
+
+
+def is_non_news(item: NewsItem) -> bool:
+    """Phase 2 umbrella: the item's primary purpose is NOT a news event —
+    it is a forecast, price target, or technical/chart analysis. Other
+    non-news classes (opinion/analysis/explainer/retrospective phrasing,
+    market wraps, URL sections) are handled by ``is_invalid_noise`` and the
+    routine-recap gate."""
+    return is_forecast(item) or is_technical_analysis(item)
+
+
+def is_memecoin_pump(item: NewsItem) -> bool:
+    """True if the item is a memecoin price-action story with no real event
+    (Phase 7). Memecoins need a listing / hack / lawsuit / major launch."""
+    title = (item.title or "").lower()
+    if not _matches(title, _MEME_RE, _MEME_SYM):
+        return False
+    # A genuine event (listing, hack, charges, launch) makes it news.
+    if _matches(title, _EVENT_RE, _EVENT_SYM):
         return False
     return True
 
@@ -519,15 +820,25 @@ def should_publish(item: NewsItem) -> bool:
     # appearance by a market-moving figure is publishable on its own.
     if is_upcoming_speech(item):
         return True
+    # Phase 2/4/5: HARD rejection of non-news content (forecast / price target
+    # / technical analysis) regardless of score. Exempt official sources and
+    # named principals (a regulator/Powell "outlook" is still news).
+    if (not item.official and not has_influential_author(item)
+            and is_non_news(item)):
+        return False
+    # Phase 7: memecoin price-action with no real event is not news.
+    if not item.official and is_memecoin_pump(item):
+        return False
     if not matches_keywords(item):
         return False
     # Opinions/forecasts only from influential people with a track record.
     if is_opinion(item) and not (item.official or has_influential_author(item)):
         return False
-    # FIX-A: positive-signal floor. Replaces allow-by-default — a non-official
-    # item must carry a real news signal (anchor / number / catalyst / named
-    # tier-1 institution), else it is topic/opinion/explainer filler.
-    if not item.official and not has_news_signal(item):
+    # Phase 1 — EVENT-FIRST floor. Replaces the old has_news_signal allow-by-
+    # number rule: a non-official item must describe a REAL EVENT (action verb,
+    # geopolitical catalyst, named principal, or a price move on a tier-1
+    # subject). A bare number / topic keyword is no longer enough.
+    if not item.official and not has_real_event(item):
         return False
     return True
 
@@ -738,14 +1049,23 @@ def is_invalid_noise(item: NewsItem) -> bool:
     title = item.title or ""
     text = f"{title} {item.summary}"
     low_title = title.lower()
+    is_reference = is_year_reference(item)
+
+    # Phase 3: an article structurally ABOUT a past year/era (retrospective)
+    # is historical noise regardless of any incidental anchor word. The
+    # comparison-reference guard keeps "levels last seen in 2020" / "highest
+    # since 2021" (current events) from being mis-flagged. Official exempt.
+    if not official and not is_reference and is_retrospective_topic(item):
+        return True
+
     has_year = bool(_noise_year_re().search(text))
-    # An item is "current-anchored" if it carries a future/imminent phrase OR
-    # the current year string itself appears (F11: legitimate current-day news
-    # that compares to 2020/2021 should not be flagged historical just because
-    # it cites a past year, when the text also names the current year).
+    # An item is "current-anchored" if it carries a future/imminent phrase, the
+    # current year string itself (F11), OR the past year is only a comparison
+    # reference ("since 2021", "last seen in 2020") — a current event.
     has_current = (
         bool(_CURRENT_FUTURE_RE.search(text))
         or str(_current_year()) in text
+        or is_reference
     )
 
     # A) Historical content (year reference with no current/future anchor).
@@ -818,7 +1138,12 @@ def filter_items(
             text = _text_of(item)
             tier1 = _count_distinct(text, _TIER1_RE, _TIER1_SYM)
             catalysts = _count_distinct(text, _CATALYST_RE, _CATALYST_SYM)
-            if tier1 == 0 and catalysts == 0:
+            # Filler: tier-2-only, no catalyst, no tier-1 anchor — AND no real
+            # event (a milestone verb like "hits"/"reaches" is an event but
+            # not a CATALYST term, so defer to has_real_event to avoid
+            # dropping "Gold hits highest since 2020").
+            if (tier1 == 0 and catalysts == 0
+                    and not has_real_event(item)):
                 continue
             # F3: hard reject for routine recap / preview headlines
             # ("Week ahead: …", "Market wrap", "Wall Street recap",

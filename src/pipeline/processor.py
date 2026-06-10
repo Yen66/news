@@ -19,7 +19,7 @@ import logging
 import time
 from typing import Optional
 
-from ..ai.writer import PostWriter
+from ..ai.writer import MalformedPostError, PostWriter
 from ..db.repository import Repository
 from ..models import NewsItem
 from ..telegram.client import TelegramClient
@@ -111,6 +111,15 @@ class Processor:
         await self._space_ai_calls()
         try:
             post = await self._writer.write(item)
+        except MalformedPostError as exc:
+            # Phase 6: deterministic output validation failed (gibberish /
+            # token salad / placeholder). Drop quietly — do NOT publish, do
+            # NOT mark seen (so a later, healthy generation can retry), and do
+            # NOT alert the admin (this is content quality, not an outage).
+            log.warning(
+                "Rejected malformed AI output for %s: %s", item.title, exc
+            )
+            return False
         except Exception as exc:  # noqa: BLE001 - surfaced as alert by caller
             log.error("Failed to write post for %s: %s", item.title, exc)
             raise

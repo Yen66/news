@@ -25,6 +25,13 @@ from .factory import AIClient
 
 log = logging.getLogger(__name__)
 
+
+class MalformedPostError(Exception):
+    """Raised when the AI-written body fails deterministic quality validation
+    (gibberish / token salad / placeholder / too short). The processor catches
+    it, skips publishing, and does NOT mark the item seen (Phase 6)."""
+
+
 # How fresh a story must be for the ⚡️ breaking prefix.
 BREAKING_WINDOW = timedelta(hours=2)
 
@@ -154,6 +161,14 @@ _FORBIDDEN_PHRASES = (
     "Время:",
     "не указана",
     "вероятным последствием является",
+    # Echoed field labels — the model occasionally repeats the contract labels
+    # in its answer; strip them rather than reject the whole post.
+    "ПРЕФИКС:",
+    "ТЕКСТ:",
+    "ТИКЕРЫ:",
+    "ЗАГОЛОВОК:",
+    "ВЛИЯНИЕ:",
+    "АКТИВЫ:",
 )
 
 _URL_RE = re.compile(r"(https?://\S+|www\.\S+|t\.me/\S+)", re.IGNORECASE)
@@ -197,6 +212,54 @@ def _keep_concrete_sentences(text: str) -> str:
         if _CONCRETE_RE.search(sentence):
             kept.append(sentence)
     return " ".join(kept).strip()
+
+
+def _clean_body(raw_text: str) -> str:
+    """The deterministic body-cleaning pipeline shared by the renderer and the
+    output validator: strip URLs, sanitise scripts, drop forbidden phrases,
+    keep only concrete sentences."""
+    body = sanitize_text(_strip_urls(raw_text or ""))
+    body = _strip_forbidden(body)
+    body = _keep_concrete_sentences(body)
+    return body
+
+
+# --- Phase 6: deterministic AI-output validation --------------------------
+# Substrings that betray a model error / placeholder (echoed field labels are
+# stripped by _clean_body, not rejected here).
+_PLACEHOLDER_MARKERS = (
+    "lorem ipsum", "as an ai", "as a language model", "as an language model",
+    "i cannot", "i'm sorry", "i am sorry", "извините, но", "не могу",
+    "placeholder", "вставьте", "вставь сюда", "ваш текст", "your text here",
+    "<вставьте", "[вставьте",
+)
+_WORD_RE = re.compile(r"[0-9A-Za-zЀ-ӿԀ-ԯ]+")
+
+
+def _validate_body(text: str) -> tuple[bool, str]:
+    """Return ``(ok, reason)``. ``ok=False`` => the body is malformed and must
+    NOT be published. Conservative by design: it catches the production
+    failure classes (token salad like ``Суротмасвород``, two-word fragments
+    like ``О предложений``, echoed labels, repeated tokens) without rejecting
+    legitimate terse one-line posts (e.g. ``Рынок вырос на 3%``)."""
+    t = (text or "").strip()
+    if not t:
+        return False, "empty"
+    low = t.lower()
+    for marker in _PLACEHOLDER_MARKERS:
+        if marker in low:
+            return False, f"placeholder:{marker!r}"
+    words = _WORD_RE.findall(t)
+    # Single concatenated token ("Суротмасвород") or a 2-word fragment
+    # ("О предложений") — not a real sentence.
+    if len(words) < 3:
+        return False, f"too_few_words:{len(words)}"
+    # Three identical tokens in a row => degenerate / looping output.
+    lowered = [w.lower() for w in words]
+    for i in range(len(lowered) - 2):
+        if lowered[i] == lowered[i + 1] == lowered[i + 2]:
+            return False, "repeated_token"
+    return True, ""
 
 
 def _is_recent(item: NewsItem, window: timedelta = BREAKING_WINDOW) -> bool:
@@ -333,11 +396,7 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
         # ⚡️ only for news published within the last 2h; flags are not gated.
         prefix = ""
 
-    body = sanitize_text(_strip_urls(
-        fields.get("ТЕКСТ") or item.summary or item.title or ""
-    ))
-    body = _strip_forbidden(body)
-    body = _keep_concrete_sentences(body)
+    body = _clean_body(fields.get("ТЕКСТ") or item.summary or item.title or "")
 
     tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 
@@ -395,6 +454,20 @@ class PostWriter:
                     editor_used = True
             except Exception as exc:  # noqa: BLE001 - proofread is best-effort
                 log.warning("Editor pass failed, using draft: %s", exc)
+
+        # Phase 6: validate the model's own post text (when it returned a
+        # parseable ТЕКСТ field) BEFORE rendering/publishing. Token salad,
+        # two-word fragments, echoed labels and placeholders are rejected so
+        # they can never reach Telegram. (When the model returned no parseable
+        # field the renderer falls back to the source title — a separate,
+        # already-safe path that is not gibberish.)
+        text_field = fields.get("ТЕКСТ")
+        if text_field is not None:
+            ok, reason = _validate_body(_clean_body(text_field))
+            if not ok:
+                raise MalformedPostError(
+                    f"{reason} | provider={provider} | title={item.title!r}"
+                )
 
         body = _render_post(fields, item)
         return Post(
