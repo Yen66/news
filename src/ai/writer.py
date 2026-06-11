@@ -111,7 +111,17 @@ _WRITER_SYSTEM = (
     "другого текста.\n"
     "Never use Greek letters (λ, μ, π) or backslash commands like \\cdot. "
     "Use only standard punctuation: . , ! ? : ; % $ № and spaces. Always "
-    "output valid JSON as shown."
+    "output valid JSON as shown.\n"
+    "Никогда не выдумывай имена и должности. Если в источнике нет имени, "
+    "пиши просто \"представитель компании\".\n"
+    "Никогда не добавляй дату (год, месяц, день), если её нет в источнике. "
+    "В частности, не используй годы до 2026.\n"
+    "Включай прямую цитату, только если она содержит конкретное число, "
+    "уникальный факт или нетривиальное утверждение. Пустые цитаты типа "
+    "\"мы рады\", \"хорошие возможности\", \"захватывающие времена\" должны "
+    "быть полностью опущены.\n"
+    "Не выдумывай числа (цены, проценты, суммы). Если числа нет в источнике, "
+    "не генерируй его."
 )
 
 _WRITER_TEMPLATE = (
@@ -148,7 +158,17 @@ _SPEECH_WRITER_SYSTEM = (
     "  \"text\":    \"<до 3 предложений по правилам выше>\",\n"
     "  \"tickers\": \"\"\n"
     "}\n\n"
-    "Выведи ТОЛЬКО JSON-объект, без markdown и без любого другого текста."
+    "Выведи ТОЛЬКО JSON-объект, без markdown и без любого другого текста.\n"
+    "Никогда не выдумывай имена и должности. Если в источнике нет имени, "
+    "пиши просто \"представитель компании\".\n"
+    "Никогда не добавляй дату (год, месяц, день), если её нет в источнике. "
+    "В частности, не используй годы до 2026.\n"
+    "Включай прямую цитату, только если она содержит конкретное число, "
+    "уникальный факт или нетривиальное утверждение. Пустые цитаты типа "
+    "\"мы рады\", \"хорошие возможности\", \"захватывающие времена\" должны "
+    "быть полностью опущены.\n"
+    "Не выдумывай числа (цены, проценты, суммы). Если числа нет в источнике, "
+    "не генерируй его."
 )
 
 _EDITOR_SYSTEM = (
@@ -262,7 +282,113 @@ def _clean_artifacts(text: str) -> str:
     return text.strip()
 
 
-# --- Phase 6: deterministic AI-output validation --------------------------
+# --- Anti-hallucination cleaners ------------------------------------------
+def _clean_made_up_names(body: str, item: NewsItem) -> str:
+    import re
+    # Match both Cyrillic and Latin names, optional patronymic, then (Title): or Title:
+    pattern = r'([А-Я][а-я]+(?:\s+[А-Я][а-я]+)?|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*(?:\([^)]+\))?\s*:'
+    source_text = f"{item.title} {item.summary}"
+
+    def replacer(match):
+        name = match.group(1).strip()
+        # simple word-boundary check
+        if name not in source_text and not any(name in part for part in source_text.split()):
+            return 'представитель компании '
+        return match.group(0)
+
+    return re.sub(pattern, replacer, body)
+
+
+def _filter_quote(body: str, item: NewsItem) -> str:
+    import re
+    stop_words = ['рады', 'хорошие', 'интерес', 'возможности', 'уверены',
+                  'продолжим', 'надеемся', 'важно', 'работаем', 'развиваемся']
+    fact_words = ['млн', 'млрд', 'процент', 'доллар', 'цена', 'выручка', 'инвестици',
+                  'миллион', 'миллиард', 'биткоин', 'эфириум', 'токен', 'крипт']
+    # Match balanced quotes: «...», "..." (but not single quotes)
+    quote_pattern = re.compile(r'([«"])(.*?)([»"])', re.DOTALL)
+
+    def should_remove(q):
+        if len(q) < 15:
+            return True
+        has_stop = any(sw in q.lower() for sw in stop_words)
+        if not has_stop:
+            return False
+        has_digit = bool(re.search(r'\d', q))
+        has_fact = any(fw in q.lower() for fw in fact_words)
+        return not (has_digit or has_fact)
+
+    new_body = body
+    for m in quote_pattern.finditer(body):
+        full, content = m.group(0), m.group(2)
+        if should_remove(content):
+            new_body = new_body.replace(full, '', 1)
+            # Remove trailing dash/comma/colon before quote
+            new_body = re.sub(r'\s*[-–:,]\s*$', '', new_body)
+    return new_body.strip()
+
+
+def _validate_numbers(body: str, item: NewsItem) -> str:
+    import re
+    # If body contains "ТИКЕРЫ:" line, split and only process non-ticker parts
+    lines = body.split('\n')
+    non_ticker_lines = []
+    ticker_line = ''
+    for line in lines:
+        if line.startswith('ТИКЕРЫ:'):
+            ticker_line = line
+        else:
+            non_ticker_lines.append(line)
+    source_text = f"{item.title} {item.summary}"
+
+    def _normalize(txt):
+        # Strip space / NBSP thousand separators between digits.
+        txt = re.sub(r'(?<=\d)[\s ]+(?=\d)', '', txt)
+        # Comma as a THOUSAND separator: a comma immediately followed by
+        # exactly three digits that are not themselves followed by another
+        # digit ("70,000", "1,234,567"). Applied before the decimal rule.
+        txt = re.sub(r'(?<=\d),(?=\d{3}(?:\D|$))', '', txt)
+        # Remaining comma before 1-2 digits is a DECIMAL comma ("7,25").
+        txt = re.sub(r'(\d+),(\d{1,2})(?!\d)', r'\1.\2', txt)
+        return txt
+
+    def extract_numbers(txt):
+        return [float(x) for x in re.findall(r'\d+(?:\.\d+)?', _normalize(txt))]
+
+    source_nums = extract_numbers(source_text)
+
+    def is_valid(num_str):
+        nstr = _normalize(num_str)
+        try:
+            val = float(re.findall(r'\d+(?:\.\d+)?', nstr)[0])
+        except (IndexError, ValueError):
+            return True
+        if not source_nums:
+            # Source carries no numbers, so any number in the body is invented.
+            return False
+        return any(abs(val - src) / (src + 1e-9) <= 0.05 for src in source_nums)
+
+    num_pattern = re.compile(
+        r'(?:\$|€|£)?\s*(\d[\d\s,.]*)\s*'
+        r'(?:%|млн|млрд|million|billion|процент|percent)?'
+    )
+
+    def replace_in_line(line):
+        def repl(m):
+            num_part = m.group(1)
+            if num_part and not is_valid(num_part):
+                return '[сумма не указана]'
+            return m.group(0)
+        return num_pattern.sub(repl, line)
+
+    new_non_ticker = [replace_in_line(line) for line in non_ticker_lines]
+    result = '\n'.join(new_non_ticker)
+    if ticker_line:
+        result += '\n' + ticker_line
+    return result
+
+
+
 # Substrings that betray a model error / placeholder (echoed field labels are
 # stripped by _clean_body, not rejected here).
 _PLACEHOLDER_MARKERS = (
@@ -509,6 +635,11 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     # Remove model artifacts (Greek look-alikes, backslash commands, truncated
     # fragments) from the rendered text before it reaches Telegram.
     body = _clean_artifacts(body)
+    # Anti-hallucination: strip invented names/titles, generic filler quotes
+    # and numbers not present in the source.
+    body = _clean_made_up_names(body, item)
+    body = _filter_quote(body, item)
+    body = _validate_numbers(body, item)
 
     tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 

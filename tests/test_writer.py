@@ -35,6 +35,7 @@ async def test_writer_renders_new_format():
     writer = PostWriter(ai, enable_editor=False)
     item = make_item(
         "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        summary="Crypto lost $390 billion, BTC support at $55 000",
         published=_now(),  # recent => ⚡️ kept
     )
     post = await writer.write(item)
@@ -61,6 +62,7 @@ async def test_bolt_dropped_when_article_is_old():
     writer = PostWriter(ai, enable_editor=False)
     item = make_item(
         "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        summary="Crypto lost $390 billion, BTC support at $55 000",
         published=_now() - timedelta(hours=5),  # stale => no ⚡️
     )
     post = await writer.write(item)
@@ -137,7 +139,8 @@ async def test_no_prefix_when_empty():
     ai = FakeAIClient(reply=fields)
     writer = PostWriter(ai, enable_editor=False)
     post = await writer.write(
-        make_item("x", source_name="Blog", link="https://b.io/a")
+        make_item("x", source_name="Blog", link="https://b.io/a",
+                  summary="Market up 3%")
     )
     assert post.body.startswith("Рынок вырос на 3%")
     assert "◎ Слух · " in post.body
