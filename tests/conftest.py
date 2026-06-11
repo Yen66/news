@@ -66,7 +66,11 @@ class FakeAIClient:
     def provider_names(self) -> List[str]:
         return [self.provider]
 
-    async def complete(self, system, user, *, temperature=0.4, max_tokens=800):
+    async def complete(self, system, user, *, temperature=0.4, max_tokens=800,
+                       **kwargs):
+        # Accept and ignore optional kwargs (e.g. response_format,
+        # frequency_penalty, presence_penalty) so the fake stays compatible
+        # with the real AIClient.complete signature as it evolves.
         self.calls.append((system, user))
         if self.fail_times > 0:
             self.fail_times -= 1

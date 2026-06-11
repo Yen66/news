@@ -120,6 +120,8 @@ class _ProviderClient:
         temperature: float,
         max_tokens: int,
         response_format: Optional[dict] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> str:
         request_kwargs: dict = {
             "model": self.cfg.model,
@@ -132,6 +134,10 @@ class _ProviderClient:
         }
         if response_format is not None:
             request_kwargs["response_format"] = response_format
+        if frequency_penalty is not None:
+            request_kwargs["frequency_penalty"] = frequency_penalty
+        if presence_penalty is not None:
+            request_kwargs["presence_penalty"] = presence_penalty
 
         resp = await self.client.chat.completions.create(**request_kwargs)
 
@@ -201,11 +207,15 @@ class AIClient:
         temperature: float = 0.4,
         max_tokens: int = 800,
         response_format: Optional[dict] = None,
+        frequency_penalty: Optional[float] = None,
+        presence_penalty: Optional[float] = None,
     ) -> tuple[str, str]:
         """Return ``(text, provider_name)``, rotating on quota errors.
 
         ``response_format`` is forwarded to the OpenAI-compatible SDK so
         callers can request structured JSON output (e.g. the writer pass).
+        ``frequency_penalty`` / ``presence_penalty`` are likewise forwarded
+        only when set, to discourage repetition in generated copy.
         Raises :class:`AllProvidersExhausted` if every provider fails.
         """
         if not self._providers:
@@ -220,6 +230,8 @@ class AIClient:
                     text = await provider.complete(
                         system, user, temperature, max_tokens,
                         response_format=response_format,
+                        frequency_penalty=frequency_penalty,
+                        presence_penalty=presence_penalty,
                     )
                     if text:
                         return text, provider.name

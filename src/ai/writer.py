@@ -566,7 +566,12 @@ class PostWriter:
             _SPEECH_WRITER_SYSTEM if item.is_upcoming_speech else _WRITER_SYSTEM
         )
 
-        writer_kwargs: dict = {"temperature": 0.2, "max_tokens": 800}
+        writer_kwargs: dict = {
+            "temperature": 0.2,
+            "max_tokens": 800,
+            "frequency_penalty": 0.3,
+            "presence_penalty": 0.2,
+        }
         if self._ai_supports_json:
             writer_kwargs["response_format"] = {"type": "json_object"}
 
@@ -584,6 +589,8 @@ class PostWriter:
                 edited, _ = await self._ai.complete(
                     _EDITOR_SYSTEM, fields["ТЕКСТ"], temperature=0.1,
                     max_tokens=400,
+                    frequency_penalty=0.3,
+                    presence_penalty=0.2,
                 )
                 if edited.strip():
                     fields["ТЕКСТ"] = edited.strip()
