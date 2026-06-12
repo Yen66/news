@@ -116,10 +116,11 @@ _WRITER_SYSTEM = (
     "пиши просто \"представитель компании\".\n"
     "Никогда не добавляй дату (год, месяц, день), если её нет в источнике. "
     "В частности, не используй годы до 2026.\n"
-    "Включай прямую цитату, только если она содержит конкретное число, "
-    "уникальный факт или нетривиальное утверждение. Пустые цитаты типа "
-    "\"мы рады\", \"хорошие возможности\", \"захватывающие времена\" должны "
-    "быть полностью опущены.\n"
+    "Никогда не сочиняй прямую цитату. Цитата допустима ТОЛЬКО если её "
+    "слова присутствуют в заголовке или описании источника. Если в "
+    "источнике нет цитаты — не пиши никаких кавычек.\n"
+    "Пустые цитаты типа \"мы рады\", \"хорошие возможности\", "
+    "\"захватывающие времена\" должны быть полностью опущены.\n"
     "Не выдумывай числа (цены, проценты, суммы). Если числа нет в источнике, "
     "не генерируй его."
 )
@@ -163,10 +164,11 @@ _SPEECH_WRITER_SYSTEM = (
     "пиши просто \"представитель компании\".\n"
     "Никогда не добавляй дату (год, месяц, день), если её нет в источнике. "
     "В частности, не используй годы до 2026.\n"
-    "Включай прямую цитату, только если она содержит конкретное число, "
-    "уникальный факт или нетривиальное утверждение. Пустые цитаты типа "
-    "\"мы рады\", \"хорошие возможности\", \"захватывающие времена\" должны "
-    "быть полностью опущены.\n"
+    "Никогда не сочиняй прямую цитату. Цитата допустима ТОЛЬКО если её "
+    "слова присутствуют в заголовке или описании источника. Если в "
+    "источнике нет цитаты — не пиши никаких кавычек.\n"
+    "Пустые цитаты типа \"мы рады\", \"хорошие возможности\", "
+    "\"захватывающие времена\" должны быть полностью опущены.\n"
     "Не выдумывай числа (цены, проценты, суммы). Если числа нет в источнике, "
     "не генерируй его."
 )
@@ -301,6 +303,7 @@ def _clean_made_up_names(body: str, item: NewsItem) -> str:
 
 def _filter_quote(body: str, item: NewsItem) -> str:
     import re
+    from ..models import _COIN_ALIASES
     stop_words = ['рады', 'хорошие', 'интерес', 'возможности', 'уверены',
                   'продолжим', 'надеемся', 'важно', 'работаем', 'развиваемся']
     fact_words = ['млн', 'млрд', 'процент', 'доллар', 'цена', 'выручка', 'инвестици',
@@ -308,15 +311,54 @@ def _filter_quote(body: str, item: NewsItem) -> str:
     # Match balanced quotes: «...», "..." (but not single quotes)
     quote_pattern = re.compile(r'([«"])(.*?)([»"])', re.DOTALL)
 
+    # Task 1.3 — quote-grounding helper. Significant tokens (4+ letters) of
+    # the source title+summary, with crypto/asset aliases normalised so
+    # "Bitcoin" / "биткоин" / "BTC" all map to the same canonical token.
+    # Letters allowed across Cyrillic and Latin so RU body and EN source
+    # share a comparison alphabet through aliasing.
+    _CYR_TO_CANONICAL = {
+        "биткоин": "btc", "биткоина": "btc", "биткоину": "btc",
+        "биткоине": "btc", "биткоином": "btc",
+        "эфир": "eth", "эфира": "eth", "эфире": "eth", "эфириум": "eth",
+        "эфириума": "eth",
+        "солана": "sol", "соланы": "sol",
+        "крипто": "crypto", "криптовалют": "crypto", "криптовалюты": "crypto",
+        "криптовалюта": "crypto",
+        "доллар": "usd", "доллара": "usd", "долларов": "usd",
+    }
+
+    def _ground_tokens(text):
+        words = re.findall(r"[a-zа-яё]{4,}", text.lower())
+        out = set()
+        for w in words:
+            if w in _COIN_ALIASES:
+                out.add(_COIN_ALIASES[w])
+            elif w in _CYR_TO_CANONICAL:
+                out.add(_CYR_TO_CANONICAL[w])
+            else:
+                out.add(w)
+        return out
+
+    source_tokens = _ground_tokens(f"{item.title} {item.summary}")
+
     def should_remove(q):
         if len(q) < 15:
             return True
         has_stop = any(sw in q.lower() for sw in stop_words)
-        if not has_stop:
-            return False
         has_digit = bool(re.search(r'\d', q))
         has_fact = any(fw in q.lower() for fw in fact_words)
-        return not (has_digit or has_fact)
+        # Existing rule: generic stop-word-laden quote with no digit/fact.
+        if has_stop and not (has_digit or has_fact):
+            return True
+        # Task 1.3 grounding rule: an invented quote whose significant words
+        # are mostly absent from the source is dropped. ≥40% overlap keeps
+        # quotes that lift real source content; lower means fabrication.
+        q_tokens = _ground_tokens(q)
+        if q_tokens and source_tokens:
+            overlap = len(q_tokens & source_tokens) / len(q_tokens)
+            if overlap < 0.40:
+                return True
+        return False
 
     new_body = body
     for m in quote_pattern.finditer(body):
@@ -326,6 +368,33 @@ def _filter_quote(body: str, item: NewsItem) -> str:
             # Remove trailing dash/comma/colon before quote
             new_body = re.sub(r'\s*[-–:,]\s*$', '', new_body)
     return new_body.strip()
+
+
+# --- Task 1.3 — strip invented past years ---------------------------------
+_YEAR_4D_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+
+
+def _strip_invalid_years(body: str, item: NewsItem) -> str:
+    """Drop sentences carrying a past year (<current UTC year) that is NOT
+    present in item.title + item.summary. Years from the source and the
+    current year are kept untouched.
+    """
+    current_year = datetime.now(timezone.utc).year
+    source_years = set(_YEAR_4D_RE.findall(f"{item.title} {item.summary}"))
+    parts = re.split(r'(?<=[.!?])\s+', body.strip())
+    kept = []
+    for sentence in parts:
+        if not sentence.strip():
+            continue
+        years = _YEAR_4D_RE.findall(sentence)
+        invented_past = [
+            y for y in years
+            if int(y) < current_year and y not in source_years
+        ]
+        if invented_past:
+            continue  # drop the whole sentence
+        kept.append(sentence)
+    return " ".join(kept).strip()
 
 
 def _validate_numbers(body: str, item: NewsItem) -> str:
@@ -684,6 +753,8 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     body = _clean_made_up_names(body, item)
     body = _filter_quote(body, item)
     body = _validate_numbers(body, item)
+    # Task 1.3: strip sentences whose past-year mention is not in the source.
+    body = _strip_invalid_years(body, item)
 
     tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
 
