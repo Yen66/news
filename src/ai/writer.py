@@ -792,6 +792,12 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     if tickers:
         lines += ["", f"<code>{e(tickers)}</code>"]
     lines += ["", source_part]
+    # Task 2.1 — deterministic hashtag line, last in the post. Plain text,
+    # space-joined, no HTML. Omitted entirely when there is no signal.
+    from .hashtags import build_hashtags
+    tags = build_hashtags(item, body, tickers, prefix=prefix)
+    if tags:
+        lines += ["", " ".join(tags)]
     return "\n".join(lines)
 
 

@@ -49,9 +49,10 @@ async def test_writer_renders_new_format():
     assert "Следующая поддержка BTC" in b
     # Monospace ticker line.
     assert "<code>BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)</code>" in b
-    # Source line last, clickable name, no visible raw URL text in body.
-    assert b.strip().endswith(
+    # Source line, then a Task-2.1 hashtag line if any hashtags matched.
+    assert (
         '◉ Официально · <a href="https://coindesk.com/x">CoinDesk</a>'
+        in b
     )
     for bad in ("МСК", "Время:", "Суть:", "Влияние:", "Активы:", "Метка:"):
         assert bad not in b
@@ -132,8 +133,9 @@ async def test_no_ticker_line_when_absent():
                   summary="SEC approved 8 spot ETFs on Ethereum on July 23")
     )
     assert "<code>" not in post.body
-    assert post.body.strip().endswith(
+    assert (
         '◉ Официально · <a href="https://reuters.com/a">Reuters</a>'
+        in post.body
     )
 
 
@@ -184,9 +186,11 @@ async def test_speech_item_uses_warning_and_never_bolt():
     # ⚠️ forced even though the model returned ⚡️ and the item is fresh.
     assert post.body.startswith("⚠️ ")
     assert "⚡️" not in post.body
-    # Still the normal footer (no custom source label).
-    assert post.body.strip().endswith(
+    # Still the normal footer (no custom source label). Task 2.1 may add
+    # a trailing hashtag line, so we assert presence, not endswith.
+    assert (
         '◉ Официально · <a href="https://cnbc.com/a">CNBC</a>'
+        in post.body
     )
 
 
