@@ -341,6 +341,18 @@ def _filter_quote(body: str, item: NewsItem) -> str:
 
     source_tokens = _ground_tokens(f"{item.title} {item.summary}")
 
+    # Task 2.0 — body-echo check. A quote that merely restates the
+    # surrounding narration adds no information; drop it. Stem-based to
+    # tolerate Russian morphology ("отдельной" / "отдельная" / "отдельные"
+    # all map to "отде"; "альткойном" / "альткоин" → "альтк"). Compute the
+    # non-quote portion of the body once.
+    def _word_stems(text):
+        words = re.findall(r"[a-zа-яё]{4,}", text.lower())
+        return {w[:4] for w in words}
+
+    non_quote_text = quote_pattern.sub('', body)
+    non_quote_stems = _word_stems(non_quote_text)
+
     def should_remove(q):
         if len(q) < 15:
             return True
@@ -357,6 +369,14 @@ def _filter_quote(body: str, item: NewsItem) -> str:
         if q_tokens and source_tokens:
             overlap = len(q_tokens & source_tokens) / len(q_tokens)
             if overlap < 0.40:
+                return True
+        # Task 2.0 body-echo rule: a quote whose significant words mostly
+        # echo the surrounding non-quote narration adds no voice or new
+        # claim, drop it. ≥70% stem overlap with the rest of the body.
+        q_stems = _word_stems(q)
+        if q_stems and non_quote_stems:
+            echo = len(q_stems & non_quote_stems) / len(q_stems)
+            if echo >= 0.70:
                 return True
         return False
 

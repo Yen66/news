@@ -50,6 +50,48 @@ def test_filter_quote_generic_filler_still_dropped():
     assert 'рады' not in out
 
 
+# --- Task 2.0: body-echo rule ----------------------------------------------
+
+def test_filter_quote_body_echo_dropped():
+    """A quote that just echoes the surrounding narration is informationless
+    and gets dropped (msg "Adam Back" production pattern)."""
+    # Make the source carry the same content so the Task-1.3 grounding rule
+    # does NOT independently drop the quote — we want Task 2.0 alone to be
+    # the reason it's removed.
+    item = make_item(
+        title="Adam Back назвал план Microstrategy отдельной альткоином",
+        summary=(
+            "Adam Back labelled the Microstrategy plan a separate altcoin, "
+            "calling it отдельной альткойном"
+        ),
+    )
+    body = (
+        "Adam Back назвал план Microstrategy отдельной альткойном. "
+        "Adam Back: «план Microstrategy — это отдельная альткоин»."
+    )
+    out = _filter_quote(body, item)
+    assert '«' not in out
+    assert 'отдельная альткоин' not in out
+
+
+def test_filter_quote_with_distinct_claim_kept():
+    """A grounded quote that ADDS a distinct claim (not in the surrounding
+    narration) must be kept by Task 2.0."""
+    item = make_item(
+        title="Регулятор может одобрить ETF в ближайшее время",
+        summary=(
+            "SEC has signalled a potential ETF approval; "
+            "регулятор обсуждает одобрение"
+        ),
+    )
+    body = (
+        "Биткоин вырос на 5% сегодня. "
+        "Аналитик: «Регулятор может одобрить ETF в ближайшее время»."
+    )
+    out = _filter_quote(body, item)
+    assert 'Регулятор может одобрить' in out
+
+
 # --- _strip_invalid_years --------------------------------------------------
 
 def test_strip_invented_past_year_drops_sentence():
