@@ -22,11 +22,27 @@ catalyst-free move summaries.
 """
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
 from typing import Iterable
 
 from ..models import NewsItem
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
+# Task 1.4 — gate kept on a module-level env-driven flag so production can
+# flip it off (export GEOPOLITICS_REQUIRES_MARKET_ANCHOR=false) without
+# redeploying if it ever over-filters.
+GEOPOLITICS_REQUIRES_MARKET_ANCHOR = _get_bool_env(
+    "GEOPOLITICS_REQUIRES_MARKET_ANCHOR", True
+)
 
 # === Relevance vocabularies ===============================================
 # TIER 1 — HIGH priority. The core of the channel. A single tier-1 hit is a
@@ -75,8 +91,12 @@ GEOPOLITICAL_TERMS = {
     "north korea",
 }
 
-# Geopolitical events are first-class tier-1 catalysts.
-TIER1_TERMS |= GEOPOLITICAL_TERMS
+# Task 1.4 — GEOPOLITICAL_TERMS is NO LONGER auto-promoted into TIER1_TERMS.
+# Pure military/diplomatic items (war, ceasefire, military drills, country-
+# pair tensions) need an additional MARKET_ANCHOR_TERMS hit to publish.
+# Economically-anchored geopolitics (tariffs, OPEC, sanctions, sovereign
+# default, debt ceiling, shutdown, elections, export controls) is included
+# in MARKET_ANCHOR_TERMS below, so it still publishes by itself.
 
 # TIER 2 — MEDIUM priority. Relevant, but a hit alone is a weaker signal.
 TIER2_TERMS = {
@@ -103,9 +123,33 @@ TIER2_TERMS = {
     "institutional",
 }
 
-RELEVANT_KEYWORDS = TIER1_TERMS | TIER2_TERMS
+# Task 1.4 — RELEVANT_KEYWORDS continues to include GEOPOLITICAL_TERMS so
+# `matches_keywords` admits them; the should_publish gate decides whether
+# the item also needs a market anchor.
+RELEVANT_KEYWORDS = TIER1_TERMS | TIER2_TERMS | GEOPOLITICAL_TERMS
 # Backwards-compatible alias (referenced in docs / older callers).
 ALL_KEYWORDS = RELEVANT_KEYWORDS
+
+
+# Task 1.4 — what counts as a "market anchor" for a geopolitical item.
+# All of TIER1 (Fed/ECB, mega-caps, indices, macro releases, crypto majors),
+# plus commodities from TIER2, plus the subset of GEOPOLITICAL_TERMS that is
+# itself inherently market-anchored (tariffs/sanctions/OPEC/default/etc.).
+# Anything else in GEOPOLITICAL_TERMS — pure military/diplomatic ("ceasefire",
+# "missile strike", "taiwan", "red sea", "russia ukraine", ...) — does NOT
+# qualify by itself and must co-occur with an anchor term to publish.
+MARKET_ANCHOR_TERMS = TIER1_TERMS | {
+    "oil", "brent", "wti", "crude", "natural gas",
+    "gold", "xau", "silver", "copper",
+} | {
+    "tariff", "tariffs", "trade war", "trade deal",
+    "sanctions", "sanctioned", "embargo", "export controls", "export ban",
+    "opec", "opec+",
+    "sovereign default", "debt default", "credit rating",
+    "downgrade us debt", "us downgrade",
+    "government shutdown", "debt ceiling",
+    "election", "elections", "presidential election",
+}
 
 # === Catalyst terms — concrete, market-moving actions ======================
 # These signal a real event (not a recap or an opinion) and earn a boost.
@@ -392,6 +436,7 @@ _CATALYST_RE, _CATALYST_SYM = _build_keyword_matcher(CATALYST_TERMS)
 _EVENT_RE, _EVENT_SYM = _build_keyword_matcher(EVENT_TERMS)
 _MOVE_RE_KW, _MOVE_SYM = _build_keyword_matcher(MOVE_TERMS)
 _GEO_RE, _GEO_SYM = _build_keyword_matcher(GEOPOLITICAL_TERMS)
+_MARKET_ANCHOR_RE, _MARKET_ANCHOR_SYM = _build_keyword_matcher(MARKET_ANCHOR_TERMS)
 _MEME_RE, _MEME_SYM = _build_keyword_matcher(MEMECOIN_TERMS)
 _REGIONAL_RE, _REGIONAL_SYM = _build_keyword_matcher(REGIONAL_NOISE_TERMS)
 _COMMENTARY_RE, _COMMENTARY_SYM = _build_keyword_matcher(COMMENTARY_TERMS)
@@ -421,6 +466,18 @@ def is_upcoming_speech(item: NewsItem) -> bool:
         return False
     low = text.lower()
     return _matches(low, _SPEECH_FIGURE_RE, _SPEECH_FIGURE_SYM)
+
+
+def is_geopolitical(item: NewsItem) -> bool:
+    """True if title+summary matches any GEOPOLITICAL_TERMS (full set)."""
+    return _matches(_text_of(item), _GEO_RE, _GEO_SYM)
+
+
+def has_market_anchor(item: NewsItem) -> bool:
+    """True if title+summary names a market anchor (tier-1 asset/CB/macro,
+    commodities, or inherently market-anchored geopolitics like tariffs/
+    OPEC/sanctions/default/election/shutdown/export-controls)."""
+    return _matches(_text_of(item), _MARKET_ANCHOR_RE, _MARKET_ANCHOR_SYM)
 
 
 def matches_keywords(item: NewsItem) -> bool:
@@ -830,6 +887,16 @@ def should_publish(item: NewsItem) -> bool:
     if not item.official and is_memecoin_pump(item):
         return False
     if not matches_keywords(item):
+        return False
+    # Task 1.4 — pure military/diplomatic geopolitics (war, ceasefire,
+    # military drills, country-pair tensions) needs a market anchor to
+    # qualify for this channel. Economically-anchored geopolitics
+    # (tariffs/OPEC/sanctions/default/election/shutdown/export-controls)
+    # is itself an anchor — those items still pass. Officials are exempt.
+    if (GEOPOLITICS_REQUIRES_MARKET_ANCHOR
+            and not item.official
+            and is_geopolitical(item)
+            and not has_market_anchor(item)):
         return False
     # Opinions/forecasts only from influential people with a track record.
     if is_opinion(item) and not (item.official or has_influential_author(item)):
