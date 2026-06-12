@@ -156,6 +156,51 @@ def story_key(title: str) -> str:
     return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
 
 
+# Task 1.1 — coarse, NUMBER-AGNOSTIC subject tokens used by the burst cap
+# (src/pipeline/subject.py). Where ``story_tokens`` produces a per-headline
+# key (different numbers → different keys), ``subject_tokens`` keeps only
+# canonical assets plus the single longest proper-noun-looking word in the
+# original-cased title, so every "SpaceX IPO ..." headline maps to the same
+# subject regardless of the specific number/wording.
+def subject_tokens(title: str) -> List[str]:
+    raw = title.strip()
+    words_lower = re.findall(r"[a-zA-Zа-яёА-ЯЁ]{3,}", raw.lower())
+    tickers = {t.lower() for t in _TICKER_RE.findall(raw)}
+    assets = {_COIN_ALIASES.get(w) for w in words_lower if w in _COIN_ALIASES}
+    # Only known assets — unlike ``story_tokens`` we do NOT keep arbitrary
+    # all-caps tokens (else "AI" / "IPO" / "CEO" would each become a
+    # standalone subject).
+    assets |= {_COIN_ALIASES[t] for t in tickers if t in _COIN_ALIASES}
+    assets = {a for a in assets if a}
+
+    # Proper-noun-like tokens: a capital letter followed by 3+ letters of
+    # any case in the ORIGINAL title (so "SpaceX", "Zuckerberg", "Иван" all
+    # qualify — CamelCase too; all-caps acronyms like "SEC"/"IPO" are too
+    # short and do not). Drop stopwords and any token already collapsed into
+    # an asset alias. Canonicalise event-synonym verbs so the same
+    # announcement under different verbs still collapses.
+    proper = re.findall(
+        r"\b[A-ZА-ЯЁ][a-zA-Zа-яёА-ЯЁ]{3,}\b", raw
+    )
+    proper_lower = [
+        _VERB_SYNONYMS.get(t.lower(), t.lower())
+        for t in proper
+        if t.lower() not in _STOPWORDS and t.lower() not in _COIN_ALIASES
+    ]
+
+    tokens = set(assets)
+    if proper_lower:
+        # The single most "significant" token — heuristic: the longest one.
+        tokens.add(max(proper_lower, key=len))
+    return sorted(tokens)
+
+
+def subject_key(title: str) -> str:
+    """Stable subject hash for burst-cap deduping across a multi-article saga."""
+    basis = " ".join(subject_tokens(title))
+    return hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+
+
 @dataclass
 class NewsItem:
     """A single news item fetched from a source, before/after processing."""

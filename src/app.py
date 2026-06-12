@@ -27,6 +27,7 @@ from .db.repository import build_repository
 from .events import CalendarError, EventCalendar, PreEventScheduler
 from .pipeline.dedup import Deduplicator
 from .pipeline.story import StoryDeduplicator
+from .pipeline.subject import SubjectCap
 from .pipeline.filters import (
     filter_items,
     is_historical,
@@ -60,6 +61,9 @@ class NewsBotApp:
         self._repo = build_repository(config.database_url)
         self._dedup = Deduplicator()
         self._story_dedup = StoryDeduplicator(config.story_dedup_window_hours)
+        self._subject_cap = SubjectCap(
+            config.subject_cap_window_hours, config.max_per_subject
+        )
         self._budget = DailyBudget(config.daily_ai_call_budget)
         self._queue = ProcessingQueue(config.queue_max_size)
         self._fetcher = FeedFetcher(timeout=config.request_timeout_seconds)
@@ -372,20 +376,28 @@ class NewsBotApp:
         cap = self._config.max_new_per_cycle
         queued = 0
         story_skipped = 0
+        subject_capped = 0
         for item in fresh:
             if cap > 0 and queued >= cap:
                 break
             if self._story_dedup.is_recent(item):
                 story_skipped += 1
                 continue
+            # Task 1.1: subject-level burst cap — stops a multi-article saga
+            # (different headlines, same subject) from flooding the queue.
+            if self._subject_cap.is_capped(item):
+                subject_capped += 1
+                continue
             if await self._queue.put(item):
                 self._story_dedup.mark(item)
+                self._subject_cap.mark(item)
                 queued += 1
 
         # Log EVERY cycle so the poller's liveness is always visible.
         log.info(
             "Poll #%d: fetched=%d old=%d historical=%d low_impact=%d kept=%d "
-            "new=%d story_dup=%d queued=%d (cap=%d min_impact=%d) per_source=%s",
+            "new=%d story_dup=%d subject_capped=%d queued=%d "
+            "(cap=%d min_impact=%d) per_source=%s",
             cycle,
             len(raw),
             age_skipped,
@@ -394,6 +406,7 @@ class NewsBotApp:
             len(kept),
             len(fresh),
             story_skipped,
+            subject_capped,
             queued,
             cap,
             self._config.min_impact_to_publish,

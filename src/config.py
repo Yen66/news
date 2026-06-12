@@ -132,6 +132,9 @@ class Config:
     log_level: str
     dry_run: bool
     min_impact_to_publish: int = 45
+    # --- Task 1.1 subject-level burst cap ---
+    subject_cap_window_hours: float = 12.0
+    max_per_subject: int = 2
     # --- pre-event alerts (calendar-driven, gated; live publishing later) ---
     enable_pre_event_alerts: bool = False
     pre_event_calendar_path: str = "src/events/calendar.yaml"
@@ -241,6 +244,10 @@ def load_config() -> Config:
         log_level=_get("LOG_LEVEL", "INFO"),
         dry_run=_get_bool("DRY_RUN", False),
         min_impact_to_publish=_get_int("MIN_IMPACT_TO_PUBLISH", 45),
+        subject_cap_window_hours=float(
+            _get_int("SUBJECT_CAP_WINDOW_HOURS", 12)
+        ),
+        max_per_subject=_get_int("MAX_PER_SUBJECT", 2),
         enable_pre_event_alerts=_get_bool("ENABLE_PRE_EVENT_ALERTS", False),
         pre_event_calendar_path=_get(
             "PRE_EVENT_CALENDAR_PATH", "src/events/calendar.yaml"
