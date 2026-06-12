@@ -74,6 +74,7 @@ async def test_bolt_dropped_when_no_pubdate():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=False)
     item = make_item("Crypto crash", source_name="CoinDesk",
+                     summary="Crypto lost $390 billion, BTC support at $55 000",
                      link="https://coindesk.com/x", published=None)
     post = await writer.write(item)
     assert not post.body.startswith("⚡️")
@@ -88,6 +89,7 @@ async def test_flag_prefix_not_time_gated():
     ai = FakeAIClient(reply=fields)
     writer = PostWriter(ai, enable_editor=False)
     item = make_item("x", source_name="Reuters", link="https://reuters.com/a",
+                     summary="SEC approved 8 spot ETFs on Ethereum on July 23",
                      published=_now() - timedelta(days=3))  # old, flag stays
     post = await writer.write(item)
     assert post.body.startswith("🇺🇸 SEC одобрила")
@@ -126,7 +128,8 @@ async def test_no_ticker_line_when_absent():
     ai = FakeAIClient(reply=fields)
     writer = PostWriter(ai, enable_editor=False)
     post = await writer.write(
-        make_item("x", source_name="Reuters", link="https://reuters.com/a")
+        make_item("x", source_name="Reuters", link="https://reuters.com/a",
+                  summary="SEC approved 8 spot ETFs on Ethereum on July 23")
     )
     assert "<code>" not in post.body
     assert post.body.strip().endswith(
@@ -173,6 +176,7 @@ async def test_speech_item_uses_warning_and_never_bolt():
     item = make_item(
         "Trump to speak today on tariffs",
         source_name="CNBC", link="https://cnbc.com/a",
+        summary="Trump speaks at 21:00 MSK today about tariffs and China",
         published=_now(),  # fresh — would normally allow ⚡️
         is_upcoming_speech=True,
     )
@@ -191,7 +195,9 @@ async def test_speech_writer_uses_speech_system_prompt():
     writer = PostWriter(ai, enable_editor=False)
     await writer.write(make_item(
         "Powell will address Congress", source_name="Reuters",
-        link="https://reuters.com/a", is_upcoming_speech=True))
+        link="https://reuters.com/a",
+        summary="Powell speaks at 21:00 MSK on monetary policy",
+        is_upcoming_speech=True))
     # The system prompt handed to the AI is the forward-looking speech one.
     system_prompt = ai.calls[0][0]
     assert "ПРЕДСТОЯЩЕГО" in system_prompt
@@ -202,6 +208,7 @@ async def test_non_speech_item_unaffected_still_uses_bolt():
     writer = PostWriter(ai, enable_editor=False)
     post = await writer.write(make_item(
         "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
+        summary="Crypto lost $390 billion, BTC support at $55 000",
         published=_now()))  # is_upcoming_speech defaults False
     assert post.body.startswith("⚡️ ")
 
@@ -300,7 +307,16 @@ def test_html_is_escaped():
 async def test_editor_runs_for_established_source():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=True)
-    item = make_item("x", source_name="CoinDesk", link="https://coindesk.com/x")
+    item = make_item(
+        "x", source_name="CoinDesk", link="https://coindesk.com/x",
+        # Source carries every number the editor-merged ticker line repeats,
+        # so the integrity gate (Task 1.2) has nothing to reject. The point
+        # of THIS test is editor-was-invoked, not content correctness.
+        summary=(
+            "Crypto lost $390 billion. BTC support at $55 000. "
+            "BTC: $59 215 (↓7,25%) · ETH: $2 890 (↓12,3%)."
+        ),
+    )
     post = await writer.write(item)
     assert post.editor_used
     assert len(ai.calls) == 2  # writer + editor
@@ -310,7 +326,8 @@ async def test_editor_skipped_for_unknown_low_impact():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=True)
     item = make_item(
-        "x", source_name="Random Blog", link="https://blog.xyz/a", impact=30
+        "x", source_name="Random Blog", link="https://blog.xyz/a", impact=30,
+        summary="Crypto lost $390 billion, BTC support at $55 000",
     )
     post = await writer.write(item)
     assert not post.editor_used
@@ -353,6 +370,7 @@ async def test_render_removes_forbidden_and_urls_in_body():
     ai = FakeAIClient(reply=fields)
     writer = PostWriter(ai, enable_editor=False)
     post = await writer.write(make_item("x", source_name="Blog",
+                                        summary="Bitcoin rose 10% today",
                                         link="https://b.io/a"))
     assert "Суть:" not in post.body
     assert "https://x.io" not in post.body
@@ -361,11 +379,14 @@ async def test_render_removes_forbidden_and_urls_in_body():
 async def test_post_official_reflects_source():
     ai = FakeAIClient(reply=FIELDS)
     writer = PostWriter(ai, enable_editor=False)
+    summary = "Crypto lost $390 billion, BTC support at $55 000"
     official = await writer.write(
-        make_item("x", source_name="CNBC", link="https://cnbc.com/a")
+        make_item("x", source_name="CNBC", link="https://cnbc.com/a",
+                  summary=summary)
     )
     rumor = await writer.write(
-        make_item("x", source_name="SomeBlog", link="https://b.io/a")
+        make_item("x", source_name="SomeBlog", link="https://b.io/a",
+                  summary=summary)
     )
     assert official.official is True
     assert rumor.official is False

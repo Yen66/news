@@ -377,9 +377,26 @@ def _validate_numbers(body: str, item: NewsItem) -> str:
         def repl(m):
             num_part = m.group(1)
             if num_part and not is_valid(num_part):
-                return '[сумма не указана]'
+                full = m.group(0)
+                # Task 1.2 (defense in depth): preserve leading/trailing
+                # whitespace from the original match so the replacement does
+                # not glue to adjacent characters when the regex's optional
+                # \s* on either side ate the surrounding spaces.
+                leading = re.match(r'\s*', full).group(0)
+                trailing = ''
+                tail_match = re.search(r'\s*$', full)
+                if tail_match:
+                    trailing = tail_match.group(0)
+                # Ensure at least one space on each side regardless of what
+                # the match captured (the integrity gate will reject anyway,
+                # but defense in depth keeps a leaked artifact readable).
+                lead = leading if leading else ' '
+                trail = trailing if trailing else ' '
+                return f"{lead}[сумма не указана]{trail}"
             return m.group(0)
-        return num_pattern.sub(repl, line)
+        out = num_pattern.sub(repl, line)
+        # Collapse any double spaces introduced by the padding above.
+        return re.sub(r' {2,}', ' ', out)
 
     new_non_ticker = [replace_in_line(line) for line in non_ticker_lines]
     result = '\n'.join(new_non_ticker)
@@ -387,6 +404,33 @@ def _validate_numbers(body: str, item: NewsItem) -> str:
         result += '\n' + ticker_line
     return result
 
+
+# --- Task 1.2: residual-artifact integrity gate --------------------------
+# A rendered body that still carries any of these markers is a leaked
+# anti-hallucination placeholder. The post must NOT ship: PostWriter.write
+# raises MalformedPostError so the processor drops it quietly (no publish,
+# no mark-seen, no admin alert).
+_RESIDUAL_ARTIFACT_MARKERS = ("[сумма не указана]", "нет цитаты")
+# A "dangling" представитель компании = the phrase with no quote («/")
+# anywhere afterward in the body (the _clean_made_up_names replacement
+# without a paired quotation that would have made it a real attribution).
+_DANGLING_REPRESENTATIVE_RE = re.compile(
+    r"представитель\s+компании", re.IGNORECASE
+)
+
+
+def _has_residual_artifact(body: str) -> bool:
+    if any(marker in body for marker in _RESIDUAL_ARTIFACT_MARKERS):
+        return True
+    rep_match = _DANGLING_REPRESENTATIVE_RE.search(body)
+    if rep_match:
+        # Dangling only if there is no Russian-style typographic quote
+        # mark anywhere after the rep phrase. ASCII " is excluded — it
+        # collides with the HTML <a href="..."> footer.
+        tail = body[rep_match.end():]
+        if not re.search(r"[«»„“”]", tail):
+            return True
+    return False
 
 
 # Substrings that betray a model error / placeholder (echoed field labels are
@@ -744,6 +788,13 @@ class PostWriter:
                 )
 
         body = _render_post(fields, item)
+        # Task 1.2: final integrity gate. A leaked anti-hallucination
+        # placeholder means the post's core fact is unverifiable — drop it.
+        if _has_residual_artifact(body):
+            raise MalformedPostError(
+                f"residual_artifact | provider={provider} "
+                f"| title={item.title!r}"
+            )
         return Post(
             item=item,
             body=body,
