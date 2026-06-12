@@ -42,8 +42,11 @@ async def test_writer_renders_new_format():
     b = post.body
     # No bold ALL-CAPS headline.
     assert "<b>" not in b
-    # Body present, starts with the bolt prefix (article is fresh).
-    assert b.startswith("⚡️ Биткоин и эфир потеряли $390")
+    # Body present, ⚡️ bolt is part of the prefix (article is fresh).
+    # Task 2.2 may prepend a type marker (e.g. 💥 for the obvap/record-loss
+    # body) BEFORE the bolt — assert presence, not startswith.
+    assert "⚡️" in b
+    assert "Биткоин и эфир потеряли $390" in b
     # Concept-only middle sentence is dropped; concrete ones kept.
     assert "Массовые ликвидации" not in b
     assert "Следующая поддержка BTC" in b
@@ -67,8 +70,10 @@ async def test_bolt_dropped_when_article_is_old():
         published=_now() - timedelta(hours=5),  # stale => no ⚡️
     )
     post = await writer.write(item)
-    assert not post.body.startswith("⚡️")
-    assert post.body.startswith("Биткоин и эфир потеряли $390")
+    # ⚡️ recency gate: bolt dropped when article is stale (>2h). A Task-2.2
+    # type marker (e.g. 💥 from обвал/record-loss) may still precede the body.
+    assert "⚡️" not in post.body
+    assert "Биткоин и эфир потеряли $390" in post.body
 
 
 async def test_bolt_dropped_when_no_pubdate():
@@ -93,7 +98,9 @@ async def test_flag_prefix_not_time_gated():
                      summary="SEC approved 8 spot ETFs on Ethereum on July 23",
                      published=_now() - timedelta(days=3))  # old, flag stays
     post = await writer.write(item)
-    assert post.body.startswith("🇺🇸 SEC одобрила")
+    # Task 2.2 may prepend a type marker before the flag; the flag itself
+    # is still present and not time-gated.
+    assert "🇺🇸 SEC одобрила" in post.body
 
 
 def test_keep_concrete_sentences_drops_filler():
@@ -214,7 +221,8 @@ async def test_non_speech_item_unaffected_still_uses_bolt():
         "Crypto crash", source_name="CoinDesk", link="https://coindesk.com/x",
         summary="Crypto lost $390 billion, BTC support at $55 000",
         published=_now()))  # is_upcoming_speech defaults False
-    assert post.body.startswith("⚡️ ")
+    # ⚡️ stays for fresh non-speech items; Task 2.2 may prepend a marker.
+    assert "⚡️" in post.body
 
 
 def test_established_sources_are_official():

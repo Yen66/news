@@ -584,6 +584,77 @@ def _clean_prefix(raw: str) -> str:
     return ""
 
 
+# --- Task 2.2: deterministic news-type marker ----------------------------
+# Single-char marker prepended to the existing flag/⚡️/⚠️ prefix to let
+# readers scan the feed by symbol. Computed in code — NEVER read from the
+# model output. First match wins in this order: regulation, then earnings/
+# data, then large move/deal.
+_MARK_REGULATION = "🏛"
+_MARK_DATA = "📊"
+_MARK_LARGE_MOVE = "💥"
+
+_REGULATION_KEYWORDS = (
+    "sec", "регулятор", "регулирован", "закон", "законопроект", "law",
+    "ruling", "court", "lawsuit", "settlement", "fined", "fine",
+    "sanction", "sanctions", "санкции", "clarity act", "mica", "cftc",
+    "регулир", "судом", "судебный",
+)
+_DATA_KEYWORDS = (
+    "earnings", "выручка", "results", "guidance", "quarterly", "квартал",
+    "прибыль", "отчёт", "отчет", "cpi", "ppi", "pce", "inflation",
+    "инфляц", "nfp", "nonfarm", "payrolls", "jobs report", "gdp", "ввп",
+)
+_MOVE_KEYWORDS = (
+    "surge", "surges", "surged", "soar", "soared", "plunge", "plunges",
+    "plunged", "crash", "crashed", "record", "all-time", "обвал", "взлёт",
+    "взлет", "крах", "рекорд",
+)
+
+
+def _is_large_move(body: str, tickers: str) -> bool:
+    """≥10% percentage change in the ticker line, OR a strong-move verb in
+    the body. Catches the visible-from-headline market events."""
+    pct_iter = re.finditer(r"[↑↓]\s*(\d+(?:[.,]\d+)?)\s*%", tickers or "")
+    for m in pct_iter:
+        try:
+            n = float(m.group(1).replace(",", "."))
+        except ValueError:
+            continue
+        if n >= 10:
+            return True
+    low = (body or "").lower()
+    for kw in _MOVE_KEYWORDS:
+        if " " in kw or "-" in kw:
+            if kw in low:
+                return True
+        elif re.search(rf"\b{re.escape(kw)}\b", low):
+            return True
+    return False
+
+
+def _matches_any(haystack: str, keywords) -> bool:
+    for kw in keywords:
+        if " " in kw or "-" in kw:
+            if kw in haystack:
+                return True
+        elif re.search(rf"\b{re.escape(kw)}\b", haystack):
+            return True
+    return False
+
+
+def type_marker(item: NewsItem, body: str, tickers: str) -> str:
+    """Return the type marker emoji or '' if no signal. First match wins:
+    regulation > earnings/data > large-move/deal."""
+    haystack = f"{item.title} {item.summary} {body}".lower()
+    if _matches_any(haystack, _REGULATION_KEYWORDS):
+        return _MARK_REGULATION
+    if _matches_any(haystack, _DATA_KEYWORDS):
+        return _MARK_DATA
+    if _is_large_move(body, tickers):
+        return _MARK_LARGE_MOVE
+    return ""
+
+
 def _domain(link: str) -> str:
     try:
         return (urlparse(link).netloc or "").lower()
@@ -765,6 +836,15 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
         prefix = ""
 
     body = _clean_body(fields.get("ТЕКСТ") or item.summary or item.title or "")
+    # Pre-compute the cleaned ТИКЕРЫ so the type_marker can scan it for a
+    # ≥10% percentage move. (The actual <code> rendering happens below.)
+    _raw_tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
+    # Task 2.2 — deterministic news-type marker prepended to the existing
+    # flag/⚡️/⚠️. Stays empty when no signal matches. The forced ⚠️ on
+    # upcoming-speech items and the ⚡️ recency gate above are unchanged.
+    marker = type_marker(item, body, _raw_tickers)
+    if marker:
+        prefix = f"{marker}{prefix}" if prefix else marker
     # Remove model artifacts (Greek look-alikes, backslash commands, truncated
     # fragments) from the rendered text before it reaches Telegram.
     body = _clean_artifacts(body)
@@ -776,7 +856,7 @@ def _render_post(fields: dict[str, str], item: NewsItem) -> str:
     # Task 1.3: strip sentences whose past-year mention is not in the source.
     body = _strip_invalid_years(body, item)
 
-    tickers = sanitize_text(_strip_urls(fields.get("ТИКЕРЫ", "")))
+    tickers = _raw_tickers
 
     label = credibility_label(item)
     name = item.source_name or "Источник"
